@@ -8,6 +8,7 @@ interface SidebarProps {
   onSelectProject: (id: string) => void;
   onCreateProject: () => void;
   onOpenGuidebook: () => void;
+  onOpenReadme: () => void;
   onOpenInstructions: () => void;
   onOpenLLMSettings: () => void;
   activeInstruction?: SystemInstruction | null;
@@ -21,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectProject,
   onCreateProject,
   onOpenGuidebook,
+  onOpenReadme,
   onOpenInstructions,
   onOpenLLMSettings,
   activeInstruction,
@@ -148,6 +150,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {knowledgeCount}件
             </span>
           )}
+        </button>
+
+        {/* GitHub README & Install Guide Quick Button */}
+        <button
+          onClick={onOpenReadme}
+          className="w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between transition-all bg-gray-850 hover:bg-gray-800 border border-gray-750 hover:border-blue-600 text-gray-300 hover:text-white group"
+          title="GitHub README & 導入・インストール手順を表示"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm group-hover:scale-110 transition-transform">
+              🐙
+            </span>
+            <span className="text-xs font-medium truncate">GitHub README & 導入</span>
+          </div>
+          <span className="text-[9px] px-1.5 py-0.2 rounded bg-gray-800 text-gray-400 font-mono">
+            Docs
+          </span>
         </button>
 
         <div className="pt-1 text-center">

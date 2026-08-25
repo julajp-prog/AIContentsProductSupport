@@ -30,7 +30,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuidebookOpen, setIsGuidebookOpen] = useState(false);
-  const [guidebookInitialTab, setGuidebookInitialTab] = useState<'knowledgeBase' | 'appUsage' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>('knowledgeBase');
+  const [guidebookInitialTab, setGuidebookInitialTab] = useState<'knowledgeBase' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>('knowledgeBase');
   const [isInstructionsModalOpen, setIsInstructionsModalOpen] = useState(false);
   const [isLLMModalOpen, setIsLLMModalOpen] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState('');
@@ -239,6 +239,10 @@ const App: React.FC = () => {
         onCreateProject={() => setIsModalOpen(true)}
         onOpenGuidebook={() => {
           setGuidebookInitialTab('knowledgeBase');
+          setIsGuidebookOpen(true);
+        }}
+        onOpenReadme={() => {
+          setGuidebookInitialTab('githubReadme');
           setIsGuidebookOpen(true);
         }}
         onOpenInstructions={() => setIsInstructionsModalOpen(true)}

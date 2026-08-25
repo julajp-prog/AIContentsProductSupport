@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal } from './common/Modal';
 import { KnowledgeItem } from '../types';
 import { KnowledgeManager } from './KnowledgeManager';
+import { GitHubReadmeGuide } from './GitHubReadmeGuide';
 import { ICONS } from '../constants';
 
 interface GuidebookModalProps {
@@ -11,7 +12,7 @@ interface GuidebookModalProps {
   onSaveKnowledge: (item: KnowledgeItem) => void;
   onDeleteKnowledge: (id: string) => void;
   onResetKnowledge: (items: KnowledgeItem[]) => void;
-  initialTab?: 'knowledgeBase' | 'appUsage' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing';
+  initialTab?: 'knowledgeBase' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing';
 }
 
 const GuidebookSection: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className }) => (
@@ -276,10 +277,10 @@ export const GuidebookModal: React.FC<GuidebookModalProps> = ({
   onResetKnowledge,
   initialTab = 'knowledgeBase',
 }) => {
-  const [activeTab, setActiveTab] = useState<'knowledgeBase' | 'appUsage' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'knowledgeBase' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>(initialTab);
 
   const TabButton: React.FC<{
-    tabId: 'knowledgeBase' | 'appUsage' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing';
+    tabId: 'knowledgeBase' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing';
     title: string;
     badge?: string;
   }> = ({ tabId, title, badge }) => (
@@ -305,6 +306,7 @@ export const GuidebookModal: React.FC<GuidebookModalProps> = ({
        <div className="flex justify-between items-center border-b border-gray-700 mb-4 overflow-x-auto">
         <div className="flex">
             <TabButton tabId="knowledgeBase" title="📚 ナレッジ管理・PDF取込" badge={`${knowledgeList.length}件`} />
+            <TabButton tabId="githubReadme" title="🐙 GitHub README & 導入" />
             <TabButton tabId="appUsage" title="🚀 アプリの使い方" />
             <TabButton tabId="llmIntegration" title="⚡ マルチLLM & PC連携" />
             <TabButton tabId="systemInstruction" title="🧠 システム設定活用術" />
@@ -320,6 +322,7 @@ export const GuidebookModal: React.FC<GuidebookModalProps> = ({
             onResetKnowledge={onResetKnowledge}
           />
         )}
+        {activeTab === 'githubReadme' && <GitHubReadmeGuide />}
         {activeTab === 'appUsage' && (
           <AppUsageGuide
             onClose={onClose}
