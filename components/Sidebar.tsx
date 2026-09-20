@@ -9,6 +9,8 @@ interface SidebarProps {
   onCreateProject: () => void;
   onOpenGuidebook: () => void;
   onOpenReadme: () => void;
+  onOpenCreativePipeline?: () => void;
+  onOpenLocalLlmGuide?: () => void;
   onOpenInstructions: () => void;
   onOpenLLMSettings: () => void;
   activeInstruction?: SystemInstruction | null;
@@ -23,6 +25,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateProject,
   onOpenGuidebook,
   onOpenReadme,
+  onOpenCreativePipeline,
+  onOpenLocalLlmGuide,
   onOpenInstructions,
   onOpenLLMSettings,
   activeInstruction,
@@ -151,6 +155,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           )}
         </button>
+
+        {/* Local LLM Benchmark & Quantization Guide Quick Button */}
+        {onOpenLocalLlmGuide && (
+          <button
+            onClick={onOpenLocalLlmGuide}
+            className="w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between transition-all bg-gradient-to-r from-emerald-950/40 to-cyan-950/30 hover:from-emerald-900/60 hover:to-cyan-900/50 border border-emerald-800/60 hover:border-emerald-500 text-emerald-200 hover:text-white group"
+            title="ローカルLLM実機ベンチマーク・量子化・チューニング解説を開く"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm group-hover:scale-110 transition-transform">
+                💻
+              </span>
+              <span className="text-xs font-semibold truncate">ローカルLLM検証</span>
+            </div>
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-700 font-mono">
+              HOT
+            </span>
+          </button>
+        )}
+
+        {/* AI Creative Video & Avatar Pipeline Quick Button */}
+        {onOpenCreativePipeline && (
+          <button
+            onClick={onOpenCreativePipeline}
+            className="w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between transition-all bg-gradient-to-r from-pink-950/40 to-purple-950/30 hover:from-pink-900/60 hover:to-purple-900/50 border border-pink-800/60 hover:border-pink-500 text-pink-200 hover:text-white group"
+            title="AI動画・画像・アバター制作パイプライン解説を開く"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm group-hover:scale-110 transition-transform">
+                🎬
+              </span>
+              <span className="text-xs font-semibold truncate">AI動画・アバター制作</span>
+            </div>
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-pink-900/80 text-pink-300 border border-pink-700 font-mono">
+              PIPE
+            </span>
+          </button>
+        )}
 
         {/* GitHub README & Install Guide Quick Button */}
         <button

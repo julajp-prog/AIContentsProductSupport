@@ -6,7 +6,7 @@ import { Modal } from './components/common/Modal';
 import { GuidebookModal } from './components/GuidebookModal';
 import { SystemInstructionModal } from './components/SystemInstructionModal';
 import { LLMProviderModal } from './components/LLMProviderModal';
-import { Project, Prompt, Tool, SystemInstruction, LLMSettings, KnowledgeItem } from './types';
+import { Project, Prompt, Tool, SystemInstruction, LLMSettings, KnowledgeItem, LLMStatusMonitorState, HyperExpertSettings } from './types';
 import { INITIAL_PROJECTS } from './constants';
 import {
   loadSystemInstructions,
@@ -20,17 +20,65 @@ import {
   loadKnowledgeList,
   saveKnowledgeList,
 } from './services/knowledgeStorage';
+import {
+  loadHyperExpertSettings,
+  saveHyperExpertSettings,
+} from './services/hyperExpertService';
 
 type ActiveView = 'dashboard' | 'editor';
 
+const PROJECTS_STORAGE_KEY = 'ai_orchestrator_projects_list';
+
+const loadProjectsWithPresets = (): Project[] => {
+  try {
+    const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (!raw) return INITIAL_PROJECTS;
+    const parsed: Project[] = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return INITIAL_PROJECTS;
+
+    // Merge missing projects or updated preset prompts/workflows
+    const updated = parsed.map(project => {
+      const preset = INITIAL_PROJECTS.find(p => p.id === project.id);
+      if (!preset) return project;
+      
+      const existingPromptIds = new Set(project.prompts.map(pr => pr.id));
+      const missingPrompts = preset.prompts.filter(pr => !existingPromptIds.has(pr.id));
+      
+      const existingWorkflowIds = new Set((project.workflows || []).map(wf => wf.id));
+      const missingWorkflows = (preset.workflows || []).filter(wf => !existingWorkflowIds.has(wf.id));
+
+      if (missingPrompts.length > 0 || missingWorkflows.length > 0) {
+        return {
+          ...project,
+          prompts: [...missingPrompts, ...project.prompts],
+          workflows: [...(project.workflows || []), ...missingWorkflows],
+        };
+      }
+      return project;
+    });
+
+    const existingIds = new Set(updated.map(p => p.id));
+    const missingPresets = INITIAL_PROJECTS.filter(p => !existingIds.has(p.id));
+    const merged = missingPresets.length > 0 ? [...updated, ...missingPresets] : updated;
+
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(merged));
+    return merged;
+  } catch {
+    return INITIAL_PROJECTS;
+  }
+};
+
 const App: React.FC = () => {
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(INITIAL_PROJECTS[0]?.id || null);
+  const [projects, setProjects] = useState<Project[]>(() => loadProjectsWithPresets());
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
+    const initial = loadProjectsWithPresets();
+    return initial[0]?.id || null;
+  });
   const [activePrompt, setActivePrompt] = useState<Prompt | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuidebookOpen, setIsGuidebookOpen] = useState(false);
-  const [guidebookInitialTab, setGuidebookInitialTab] = useState<'knowledgeBase' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>('knowledgeBase');
+  const [guidebookInitialTab, setGuidebookInitialTab] = useState<'knowledgeBase' | 'localLlm' | 'creativePipeline' | 'techFunnel' | 'harmFunnel' | 'appUsage' | 'githubReadme' | 'llmIntegration' | 'systemInstruction' | 'loveMarketing'>('knowledgeBase');
   const [isInstructionsModalOpen, setIsInstructionsModalOpen] = useState(false);
   const [isLLMModalOpen, setIsLLMModalOpen] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState('');
@@ -48,6 +96,62 @@ const App: React.FC = () => {
 
   // LLM Providers & Settings State
   const [llmSettings, setLlmSettings] = useState<LLMSettings>(() => loadLLMSettings());
+
+  // Hyper-Dimensional Expert (PATH Cognitive OS) State
+  const [hyperExpertSettings, setHyperExpertSettings] = useState<HyperExpertSettings>(() => loadHyperExpertSettings());
+
+  const handleUpdateHyperExpertSettings = (newSettings: HyperExpertSettings) => {
+    setHyperExpertSettings(newSettings);
+    saveHyperExpertSettings(newSettings);
+  };
+
+  // Constant Live Status Monitor State (極小ステータスモニター)
+  const [llmStatus, setLlmStatus] = useState<LLMStatusMonitorState>(() => {
+    const activeP = llmSettings.providers[llmSettings.activeProvider] || llmSettings.providers.gemini;
+    return {
+      status: 'idle',
+      providerId: llmSettings.activeProvider,
+      providerName: activeP.name,
+      model: activeP.selectedModel,
+      connectionMode: activeP.connectionMode || 'direct',
+      endpoint: activeP.baseUrl || '',
+      characterCount: 0,
+      isGeminiIsolated: llmSettings.activeProvider !== 'gemini',
+      lastUpdated: Date.now(),
+    };
+  });
+
+  // Sync monitor state when active provider or provider settings change
+  useEffect(() => {
+    const activeP = llmSettings.providers[llmSettings.activeProvider] || llmSettings.providers.gemini;
+    setLlmStatus(prev => ({
+      ...prev,
+      providerId: llmSettings.activeProvider,
+      providerName: activeP.name,
+      model: activeP.selectedModel,
+      connectionMode: activeP.connectionMode || 'direct',
+      endpoint: activeP.baseUrl || '',
+      isGeminiIsolated: llmSettings.activeProvider !== 'gemini',
+      lastUpdated: Date.now(),
+    }));
+  }, [llmSettings.activeProvider, llmSettings.providers]);
+
+  const handleStatusUpdate = (partialStatus: Partial<LLMStatusMonitorState>) => {
+    setLlmStatus(prev => ({
+      ...prev,
+      ...partialStatus,
+      lastUpdated: Date.now(),
+    }));
+  };
+
+  // Keep localStorage in sync with projects
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    } catch (e) {
+      console.error('Failed to sync projects to localStorage', e);
+    }
+  }, [projects]);
 
   // Keep localStorage in sync with knowledge base
   useEffect(() => {
@@ -245,32 +349,46 @@ const App: React.FC = () => {
           setGuidebookInitialTab('githubReadme');
           setIsGuidebookOpen(true);
         }}
+        onOpenLocalLlmGuide={() => {
+          setGuidebookInitialTab('localLlm');
+          setIsGuidebookOpen(true);
+        }}
+        onOpenCreativePipeline={() => {
+          setGuidebookInitialTab('creativePipeline');
+          setIsGuidebookOpen(true);
+        }}
         onOpenInstructions={() => setIsInstructionsModalOpen(true)}
         onOpenLLMSettings={() => setIsLLMModalOpen(true)}
         activeInstruction={activeInstruction}
         llmSettings={llmSettings}
         knowledgeCount={knowledgeList.length}
       />
-      <MainContent 
-        activeProject={activeProject} 
-        activePrompt={activePrompt}
-        activeView={activeView}
-        setActiveView={setActiveView}
-        onSelectPrompt={handleSelectPrompt}
-        onUpdatePrompt={handleUpdatePrompt}
-        onCreatePrompt={handleCreatePrompt}
-        onClonePrompt={handleClonePrompt}
-        instructions={instructions}
-        activeInstructionId={activeInstructionId}
-        onSelectInstructionId={setActiveInstructionId}
-        onOpenInstructionsModal={() => setIsInstructionsModalOpen(true)}
-        llmSettings={llmSettings}
-        onOpenLLMSettings={() => setIsLLMModalOpen(true)}
-        onUpdateLLMSettings={handleUpdateLLMSettings}
-        knowledgeList={knowledgeList}
-        onOpenKnowledgeModal={handleOpenKnowledgeModal}
-      />
-      <ToolsAccordion onSelectTool={handleSelectTool} />
+      <div className="flex-grow flex flex-col min-w-0 h-full overflow-hidden relative">
+        <MainContent 
+          activeProject={activeProject} 
+          activePrompt={activePrompt}
+          activeView={activeView}
+          setActiveView={setActiveView}
+          onSelectPrompt={handleSelectPrompt}
+          onUpdatePrompt={handleUpdatePrompt}
+          onCreatePrompt={handleCreatePrompt}
+          onClonePrompt={handleClonePrompt}
+          instructions={instructions}
+          activeInstructionId={activeInstructionId}
+          onSelectInstructionId={setActiveInstructionId}
+          onOpenInstructionsModal={() => setIsInstructionsModalOpen(true)}
+          llmSettings={llmSettings}
+          onOpenLLMSettings={() => setIsLLMModalOpen(true)}
+          onUpdateLLMSettings={handleUpdateLLMSettings}
+          knowledgeList={knowledgeList}
+          onOpenKnowledgeModal={handleOpenKnowledgeModal}
+          monitorState={llmStatus}
+          onStatusUpdate={handleStatusUpdate}
+          hyperExpertSettings={hyperExpertSettings}
+          onUpdateHyperExpertSettings={handleUpdateHyperExpertSettings}
+        />
+        <ToolsAccordion onSelectTool={handleSelectTool} />
+      </div>
 
       {/* New Project Modal */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="新規プロジェクト作成">

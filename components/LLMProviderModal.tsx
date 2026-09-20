@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { LLMSettings, LLMProviderConfig, ProviderType, GeminiRateLimitSettings } from '../types';
-import { testProviderConnection, ConnectionTestResult, getGeminiRecentRequestCount } from '../services/llmService';
+import { LLMSettings, LLMProviderConfig, ProviderType, GeminiRateLimitSettings, ConnectionMode } from '../types';
+import { testProviderConnection, ConnectionTestResult, getGeminiRecentRequestCount, fetchProviderModels } from '../services/llmService';
 import { ICONS } from '../constants';
 import { Spinner } from './common/Spinner';
 
@@ -24,6 +24,8 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [customModelInput, setCustomModelInput] = useState('');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [modelSyncNotice, setModelSyncNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalProviders(settings.providers);
@@ -88,6 +90,36 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
       selectedModel: modelName,
     });
     setCustomModelInput('');
+  };
+
+  const handleFetchModelsFromAPI = async () => {
+    setIsFetchingModels(true);
+    setModelSyncNotice(null);
+    try {
+      const fetched = await fetchProviderModels(currentProvider);
+      if (fetched && fetched.length > 0) {
+        const merged = Array.from(new Set([...fetched, ...currentProvider.availableModels]));
+        const newSelected = fetched.includes(currentProvider.selectedModel)
+          ? currentProvider.selectedModel
+          : fetched[0];
+
+        handleUpdateCurrentProvider({
+          availableModels: merged,
+          selectedModel: newSelected,
+        });
+
+        setModelSyncNotice(`✓ APIより最新提供モデル ${fetched.length} 件を正常に取得・更新しました（選択中: ${newSelected}）`);
+        setTimeout(() => setModelSyncNotice(null), 4500);
+      } else {
+        setModelSyncNotice('モデル一覧の取得結果が0件でした。APIキーやエンドポイント設定を確認してください。');
+        setTimeout(() => setModelSyncNotice(null), 4500);
+      }
+    } catch (err: any) {
+      setModelSyncNotice(`モデル取得エラー: ${err.message || '通信に失敗しました'}`);
+      setTimeout(() => setModelSyncNotice(null), 4500);
+    } finally {
+      setIsFetchingModels(false);
+    }
   };
 
   const handleSaveAll = () => {
@@ -377,6 +409,63 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
 
             {/* API KEY & ENDPOINT INPUTS */}
             <div className="space-y-4">
+              {/* Local Provider Connection Mode Switcher (LM Studio / Ollama) */}
+              {(currentProvider.id === 'lmstudio' || currentProvider.id === 'ollama') && (
+                <div className="bg-gray-850 p-4 rounded-xl border border-gray-750 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>🔄 通信経路モード設定 (Direct / Proxy)</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-750 font-mono font-bold">
+                        {(currentProvider.connectionMode || 'direct').toUpperCase()}
+                      </span>
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-relaxed">
+                    ローカルPCで稼働中の {currentProvider.name} との接続方法を選択します。ブラウザのCORS制限を受ける場合は「Proxy経由」を選択してください。
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {/* Direct Mode Option */}
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateCurrentProvider({ connectionMode: 'direct' })}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        (currentProvider.connectionMode || 'direct') === 'direct'
+                          ? 'bg-indigo-950/60 border-indigo-500 shadow-md shadow-indigo-950/50 text-white'
+                          : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold text-xs">
+                        <span>⚡</span>
+                        <span>Direct接続 (直接通信)</span>
+                      </div>
+                      <p className="text-[10px] mt-1 text-gray-400 font-normal">
+                        ブラウザからローカルポート（{currentProvider.defaultEndpoint}）へ直接リクエストを送信します。
+                      </p>
+                    </button>
+
+                    {/* Proxy Mode Option */}
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateCurrentProvider({ connectionMode: 'proxy' })}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        currentProvider.connectionMode === 'proxy'
+                          ? 'bg-amber-950/60 border-amber-500 shadow-md shadow-amber-950/50 text-white'
+                          : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold text-xs">
+                        <span>🔀</span>
+                        <span>Proxy経由 (Viteサーバー転送)</span>
+                      </div>
+                      <p className="text-[10px] mt-1 text-gray-400 font-normal">
+                        Viteのバックエンドプロキシ経由で中継。ブラウザのCORS制限やMixed Contentを100%回避します。
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Endpoint URL (For Ollama, LM Studio, Custom, OpenRouter) */}
               {currentProvider.id !== 'gemini' && (
                 <div>
@@ -401,18 +490,21 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
                     className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   {currentProvider.id === 'ollama' && (
-                    <p className="text-[11px] text-amber-300/90 mt-1.5 leading-relaxed bg-amber-950/30 p-2.5 rounded-lg border border-amber-800/40">
-                      💡 <strong>ローカルOllamaのCORS設定方法:</strong><br />
-                      ブラウザからローカル接続するため、Ollama起動時にCORS許可が必要です。<br />
-                      ・Mac/Linux: <code>OLLAMA_ORIGINS=&quot;*&quot; ollama serve</code><br />
-                      ・Windows: システム環境変数に <code>OLLAMA_ORIGINS</code> = <code>*</code> を追加してOllamaを再起動
-                    </p>
+                    <div className="text-[11px] text-amber-300/90 mt-1.5 leading-relaxed bg-amber-950/30 p-2.5 rounded-lg border border-amber-800/40 space-y-1">
+                      <div>💡 <strong>ローカルOllamaの接続ポイント:</strong></div>
+                      <div>・<strong>クラウドプレビュー（HTTPS）の場合:</strong> ブラウザ保護によりPCのhttp://localhostへの直接通信が制限されます。ngrok等のトンネルURLを設定するか、標準の「Google Gemini」をご利用ください。</div>
+                      <div>・<strong>ローカル実行（npm run dev）の場合:</strong> 上の「Proxy経由」を選択すればCORS制限なしで即座に通信できます。</div>
+                      <div>・<strong>Direct接続時:</strong> <code>OLLAMA_ORIGINS=&quot;*&quot; ollama serve</code> でCORSを許可してください。</div>
+                    </div>
                   )}
                   {currentProvider.id === 'lmstudio' && (
-                    <p className="text-[11px] text-cyan-300/90 mt-1.5 leading-relaxed bg-cyan-950/30 p-2.5 rounded-lg border border-cyan-800/40">
-                      💡 <strong>LM Studioの設定:</strong><br />
-                      「Local Server」タブを開き、モデルをロードして「Start Server」を押してください。CORSが自動有効化されます。
-                    </p>
+                    <div className="text-[11px] text-cyan-300/90 mt-1.5 leading-relaxed bg-cyan-950/30 p-2.5 rounded-lg border border-cyan-800/40 space-y-1">
+                      <div>💡 <strong>LM Studioの設定と通信ガイド:</strong></div>
+                      <div>1. LM Studioの「Local Server」タブを開き、モデルをロードして「Start Server」を押してください。</div>
+                      <div>2. <strong>クラウドプレビュー（HTTPS）の場合:</strong> ブラウザのMixed Content保護によりローカルPCへの直接通信は制限されます。ngrok等のHTTPSトンネル（例: <code>https://xxxx.ngrok-free.app/v1</code>）をBase URLに指定するか、本アプリをローカル（<code>npm run dev</code>）で実行してください。</div>
+                      <div>3. <strong>ローカル実行（npm run dev）の場合:</strong> 「Proxy経由」を選択するか、LM Studioの「Enable CORS」をONにすればスムーズに通信できます。</div>
+                      <div>4. 今すぐプロンプトを実行したい場合は、右上のプロバイダーで「Google Gemini」を選択してください。</div>
+                    </div>
                   )}
                 </div>
               )}
@@ -500,20 +592,72 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
                     <p className="mt-0.5 opacity-90">
                       {testResult?.message || currentProvider.testMessage}
                     </p>
+
+                    {/* One-click switch to suggested proxy mode if direct connection failed */}
+                    {testResult?.suggestedMode && (
+                      <div className="mt-2 pt-2 border-t border-gray-700/60 flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-amber-300">
+                          ⚡ Proxy経由ならCORSを回避して接続できることが確認されました。
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleUpdateCurrentProvider({ connectionMode: testResult.suggestedMode });
+                            setTestResult(prev => prev ? { ...prev, suggestedMode: undefined } : null);
+                          }}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] rounded-lg shadow shrink-0"
+                        >
+                          👉 Proxyモードに切り替える
+                        </button>
+                      </div>
+                    )}
                   </div>
+                </div>
+              )}
+
+              {/* Gemini API Isolation Notice */}
+              {currentProvider.id !== 'gemini' && (
+                <div className="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3 text-xs text-gray-300 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-300 text-xs">
+                    <span>🔒</span>
+                    <span>TEXT系 LLM 独立稼働保証（Gemini API完全非漏洩）</span>
+                  </div>
+                  <p className="text-[11px] text-gray-300 leading-relaxed">
+                    「{currentProvider.name}」が選択されている間、すべてのプロンプト生成は {currentProvider.name}（{currentProvider.connectionMode === 'proxy' ? 'Vite Proxy経由' : 'Direct接続'}）でのみ処理されます。Google Gemini API への通信はコードレベルで完全遮断されており、外部へプロンプトが送信されることは一切ありません。
+                  </p>
                 </div>
               )}
 
               {/* MODEL SELECTION & CUSTOM MODEL ADDITION */}
               <div className="space-y-3 pt-2">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center flex-wrap gap-2">
                   <label className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
                     <span>🤖 使用モデルの選択</span>
                     <span className="text-[11px] text-blue-400 bg-blue-950 px-2 py-0.2 rounded-full border border-blue-800">
                       {currentProvider.availableModels.length} モデル登録中
                     </span>
                   </label>
+
+                  {/* Dynamic Model Fetch & Update Button */}
+                  <button
+                    type="button"
+                    onClick={handleFetchModelsFromAPI}
+                    disabled={isFetchingModels}
+                    className="px-2.5 py-1 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 text-white text-[11px] font-bold rounded-lg shadow flex items-center gap-1.5 transition-all disabled:opacity-50 shrink-0"
+                    title="公式APIを呼び出して最新の提供モデル一覧を取得し、リストを自動更新します"
+                  >
+                    {isFetchingModels ? <Spinner /> : <span>🔄</span>}
+                    <span>{isFetchingModels ? 'モデル一覧取得中...' : '最新モデル一覧をAPIから更新'}</span>
+                  </button>
                 </div>
+
+                {/* Model Sync Notification Banner */}
+                {modelSyncNotice && (
+                  <div className="px-3 py-2 bg-blue-950/80 border border-blue-700 rounded-xl text-xs text-blue-200 flex items-center gap-2">
+                    <span>✨</span>
+                    <span>{modelSyncNotice}</span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="md:col-span-2">
@@ -522,11 +666,21 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
                       onChange={e => handleUpdateCurrentProvider({ selectedModel: e.target.value })}
                       className="w-full bg-gray-800 border border-gray-700 text-sm text-white rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                     >
-                      {currentProvider.availableModels.map(m => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
+                      {currentProvider.availableModels.map(m => {
+                        let label = m;
+                        if (currentProvider.id === 'gemini') {
+                          if (m === 'gemini-flash-latest') label = `${m} ★ (Google公式・自動最新追従)`;
+                          else if (m === 'gemini-pro-latest') label = `${m} ★ (Google公式Pro・自動最新追従)`;
+                          else if (m === 'gemini-3.8-flash') label = `${m} (現行高速標準)`;
+                          else if (m === 'gemini-3.1-pro-preview') label = `${m} (高精度推論)`;
+                          else if (m === 'gemini-3.1-flash-lite') label = `${m} (軽量高速)`;
+                        }
+                        return (
+                          <option key={m} value={m}>
+                            {label}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 

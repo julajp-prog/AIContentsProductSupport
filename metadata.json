@@ -2,5 +2,7 @@
   "name": "AIプロンプト オーケストレーター",
   "description": "AIプロンプトを多様なモードで管理、連鎖、実行するための強力なアプリケーション。ワークフローをプロジェクトに整理し、Note.comなどのプラットフォーム向けのコンテンツ作成プロセスを「パブリッシャーモデル」の発想で効率化します。",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

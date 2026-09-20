@@ -1,5 +1,6 @@
 import { SystemInstruction } from '../types';
 import { SAMPLE_SYSTEM_INSTRUCTIONS } from '../constants';
+import { safeSetItem } from './storage';
 
 const STORAGE_KEY = 'ai_orchestrator_system_instructions';
 
@@ -18,7 +19,12 @@ export const loadSystemInstructions = (): SystemInstruction[] => {
     const existingIds = new Set(parsed.map(i => i.id));
     const missingPresets = SAMPLE_SYSTEM_INSTRUCTIONS.filter(sample => !existingIds.has(sample.id));
     
-    return [...parsed, ...missingPresets];
+    if (missingPresets.length > 0) {
+      const merged = [...parsed, ...missingPresets];
+      safeSetItem(STORAGE_KEY, merged);
+      return merged;
+    }
+    return parsed;
   } catch (err) {
     console.error('Failed to load system instructions from localStorage:', err);
     return SAMPLE_SYSTEM_INSTRUCTIONS;
@@ -26,11 +32,7 @@ export const loadSystemInstructions = (): SystemInstruction[] => {
 };
 
 export const saveSystemInstructions = (instructions: SystemInstruction[]): void => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(instructions));
-  } catch (err) {
-    console.error('Failed to save system instructions to localStorage:', err);
-  }
+  safeSetItem(STORAGE_KEY, instructions);
 };
 
 export const createSystemInstruction = (

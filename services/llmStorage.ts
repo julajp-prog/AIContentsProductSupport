@@ -1,4 +1,5 @@
 import { LLMSettings, LLMProviderConfig, ProviderType, GeminiRateLimitSettings } from '../types';
+import { safeSetItem, safeGetItem } from './storage';
 
 export const DEFAULT_GEMINI_RATE_LIMIT: GeminiRateLimitSettings = {
   rpm: 15, // Free tier default 15 RPM
@@ -12,16 +13,19 @@ export const INITIAL_PROVIDERS_CONFIG: Record<ProviderType, LLMProviderConfig> =
     name: 'Google Gemini',
     category: 'cloud',
     enabled: true,
-    selectedModel: 'gemini-2.5-flash',
+    selectedModel: 'gemini-flash-latest',
     availableModels: [
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
+      'gemini-flash-latest',
+      'gemini-pro-latest',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash',
+      'gemini-3.1-pro-preview',
+      'gemini-3.1-flash-lite',
     ],
     defaultEndpoint: 'https://generativelanguage.googleapis.com',
-    description: '標準搭載のGoogle Gemini。高速・高品質なマルチモーダル対応LLM。無料枠向けRPMタイマー制御に対応。',
+    description: '標準搭載のGoogle Gemini。自動最新追従エイリアス(gemini-flash-latest/gemini-pro-latest)および動的モデルリスト取得に対応。',
     docsUrl: 'https://ai.google.dev',
     testStatus: 'success',
     testLatencyMs: 80,
@@ -57,6 +61,8 @@ export const INITIAL_PROVIDERS_CONFIG: Record<ProviderType, LLMProviderConfig> =
     category: 'local',
     enabled: false,
     baseUrl: 'http://localhost:11434',
+    connectionMode: 'direct',
+    proxyUrl: '/api/proxy/ollama',
     defaultEndpoint: 'http://localhost:11434',
     selectedModel: 'llama3.3:latest',
     availableModels: [
@@ -68,7 +74,7 @@ export const INITIAL_PROVIDERS_CONFIG: Record<ProviderType, LLMProviderConfig> =
       'phi4:latest',
       'mistral:latest',
     ],
-    description: 'あなたのPCで完全ローカル実行される無料・無制限LLM。通信費不要＆オフライン動作。モデル一覧自動取得対応。',
+    description: 'あなたのPCで完全ローカル実行される無料・無制限LLM。Direct(直接)とProxy(プロキシ)の双方で通信可能。',
     docsUrl: 'https://ollama.com',
     testStatus: 'untested',
   },
@@ -78,10 +84,12 @@ export const INITIAL_PROVIDERS_CONFIG: Record<ProviderType, LLMProviderConfig> =
     category: 'local',
     enabled: false,
     baseUrl: 'http://localhost:1234/v1',
+    connectionMode: 'direct',
+    proxyUrl: '/api/proxy/lmstudio',
     defaultEndpoint: 'http://localhost:1234/v1',
     selectedModel: 'local-model',
     availableModels: ['local-model'],
-    description: 'LM Studioのローカル推論サーバー（OpenAI互換）。ロード中のローカルモデル一覧を即時取得可能。',
+    description: 'LM Studioのローカル推論サーバー（OpenAI互換）。Direct(直接)とProxy(プロキシ)の双方で確実通信＆Gemini漏洩防止。',
     docsUrl: 'https://lmstudio.ai',
     testStatus: 'untested',
   },
@@ -240,12 +248,55 @@ export const loadLLMSettings = (): LLMSettings => {
           mergedProviders[id] = {
             ...INITIAL_PROVIDERS_CONFIG[id],
             ...parsed.providers[id],
+            connectionMode: parsed.providers[id]?.connectionMode || INITIAL_PROVIDERS_CONFIG[id]?.connectionMode || 'direct',
+            proxyUrl: parsed.providers[id]?.proxyUrl || INITIAL_PROVIDERS_CONFIG[id]?.proxyUrl,
           };
         }
       });
     }
 
-    return {
+    // Auto-migrate deprecated or unsupported Gemini models (e.g. gemini-2.5-flash / gemini-2.0-flash)
+    const DEPRECATED_GEMINI_MODELS = [
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-2.0-pro',
+      'gemini-2.0-flash-thinking',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-pro',
+    ];
+
+    let hadGeminiMigration = false;
+    if (
+      !mergedProviders.gemini.selectedModel ||
+      DEPRECATED_GEMINI_MODELS.includes(mergedProviders.gemini.selectedModel)
+    ) {
+      mergedProviders.gemini.selectedModel = 'gemini-3.8-flash';
+      hadGeminiMigration = true;
+    }
+
+    // Sanitize available models for Gemini to remove deprecated ones and ensure current ones exist
+    const currentGeminiModels = (mergedProviders.gemini.availableModels || []).filter(
+      m => !DEPRECATED_GEMINI_MODELS.includes(m)
+    );
+    const standardGeminiModels = [
+      'gemini-flash-latest',
+      'gemini-pro-latest',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash',
+      'gemini-3.1-pro-preview',
+      'gemini-3.1-flash-lite',
+    ];
+    mergedProviders.gemini.availableModels = Array.from(
+      new Set([...standardGeminiModels, ...currentGeminiModels])
+    );
+
+    const loadedSettings: LLMSettings = {
       activeProvider: parsed.activeProvider || 'gemini',
       providers: mergedProviders,
       geminiRateLimit: {
@@ -253,6 +304,12 @@ export const loadLLMSettings = (): LLMSettings => {
         ...(parsed.geminiRateLimit || {}),
       },
     };
+
+    if (hadGeminiMigration) {
+      safeSetItem(STORAGE_KEY, loadedSettings);
+    }
+
+    return loadedSettings;
   } catch (err) {
     console.error('Failed to load LLM settings from localStorage:', err);
     return {
@@ -264,11 +321,7 @@ export const loadLLMSettings = (): LLMSettings => {
 };
 
 export const saveLLMSettings = (settings: LLMSettings): void => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  } catch (err) {
-    console.error('Failed to save LLM settings to localStorage:', err);
-  }
+  safeSetItem(STORAGE_KEY, settings);
 };
 
 export const resetLLMSettingsToDefault = (): LLMSettings => {

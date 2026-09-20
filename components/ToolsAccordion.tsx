@@ -13,16 +13,19 @@ export const ToolsAccordion: React.FC<ToolsAccordionProps> = ({ onSelectTool }) 
   const categories = [...new Set(PRE_BUILT_TOOLS.map(tool => tool.category))];
 
   return (
-    <div className="fixed bottom-0 left-64 right-0 bg-gray-800 border-t border-gray-700 z-20">
+    <div className="relative flex-shrink-0 bg-gray-850 border-t border-gray-750 z-10 select-none">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-3 text-left font-semibold text-white flex justify-between items-center hover:bg-gray-700 transition-colors"
+        className="w-full px-4 py-2 text-left font-semibold text-xs text-gray-300 flex justify-between items-center hover:bg-gray-800 transition-colors"
       >
-        <span>ツールパレット</span>
-        <span className={`transform transition-transform ${isOpen ? 'rotate-180' : ''}`}>{ICONS.chevronDown}</span>
+        <span className="flex items-center gap-1.5">
+          <span>🛠️</span>
+          <span>プリセット・ツールパレット</span>
+        </span>
+        <span className={`transform transition-transform text-xs ${isOpen ? 'rotate-180' : ''}`}>{ICONS.chevronDown}</span>
       </button>
       {isOpen && (
-        <div className="p-4 bg-gray-800 max-h-64 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="p-3 bg-gray-900 max-h-52 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 border-t border-gray-750">
           {categories.map(category => (
             <div key={category}>
               <h3 className="text-sm font-semibold uppercase text-gray-400 mb-2">{category}</h3>

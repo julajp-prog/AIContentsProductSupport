@@ -18,6 +18,8 @@ export type ProviderType =
   | 'anthropic' 
   | 'custom';
 
+export type ConnectionMode = 'direct' | 'proxy';
+
 export interface LLMProviderConfig {
   id: ProviderType;
   name: string;
@@ -25,6 +27,8 @@ export interface LLMProviderConfig {
   enabled: boolean;
   apiKey?: string;
   baseUrl?: string;
+  connectionMode?: ConnectionMode; // 'direct' (fetch direct to localhost) or 'proxy' (via /api/proxy/...)
+  proxyUrl?: string; // Optional custom proxy URL
   selectedModel: string;
   availableModels: string[];
   temperature?: number;
@@ -36,6 +40,23 @@ export interface LLMProviderConfig {
   testStatus?: 'success' | 'error' | 'testing' | 'untested';
   testLatencyMs?: number;
   testMessage?: string;
+}
+
+export type LLMRuntimeStatus = 'idle' | 'cooldown' | 'connecting' | 'streaming' | 'completed' | 'error';
+
+export interface LLMStatusMonitorState {
+  status: LLMRuntimeStatus;
+  providerId: ProviderType;
+  providerName: string;
+  model: string;
+  connectionMode: 'direct' | 'proxy' | 'cloud';
+  endpoint: string;
+  characterCount: number;
+  latencyMs?: number;
+  cooldownSeconds?: number;
+  errorMessage?: string;
+  isGeminiIsolated: boolean; // Guaranteed true when non-gemini is selected: Gemini API is completely uncalled
+  lastUpdated: number;
 }
 
 export interface GeminiRateLimitSettings {
@@ -127,5 +148,27 @@ export enum NoteAccountType {
   PAID_CONTENT = '有料コンテンツ・特典用',
   EDUCATION = '学習・無料講座用',
   AFFILIATE = 'アフィリエイト用',
+}
+
+export type ExpertDimensionId = 'roadmap' | 'funnel' | 'promotion' | 'content' | 'concept';
+
+export type ExpertResonanceLevel = 'shu' | 'ha' | 'ri'; // 守(型再現) / 破(連動変形) / 離(超次元全解放)
+
+export interface ExpertDimensionDef {
+  id: ExpertDimensionId;
+  name: string;
+  symbol: string;
+  title: string;
+  domain: string;
+  description: string;
+  metaLenses: string[];
+}
+
+export interface HyperExpertSettings {
+  isEnabled: boolean; // 超高次元エキスパートモード全体 ON/OFF
+  resonanceLevel: ExpertResonanceLevel; // 守破離レベル
+  butlerPersonaEnabled: boolean; // 統合執事（Integrated Butler）による多重複合編成
+  activeDimensions: Record<ExpertDimensionId, boolean>; // 個別Expert部分適用
+  customFocusPrompt?: string; // 独自の超次元拘束・追加指示
 }
 

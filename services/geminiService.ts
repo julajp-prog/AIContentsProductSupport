@@ -1,11 +1,14 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { ExecutionMode } from '../types';
 
-if (!process.env.API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let aiClient: GoogleGenAI | null = null;
+const getAi = (): GoogleGenAI => {
+  if (!aiClient) {
+    const key = (typeof process !== 'undefined' ? (process.env.API_KEY || process.env.GEMINI_API_KEY) : '') || '';
+    aiClient = new GoogleGenAI({ apiKey: key });
+  }
+  return aiClient;
+};
 
 const getSystemInstructionForMode = (mode: ExecutionMode, originalPrompt: string): string | undefined => {
   switch (mode) {
@@ -44,15 +47,15 @@ export const executePrompt = async (
   try {
     const finalSystemInstruction = composeFinalSystemInstruction(mode, prompt, customSystemInstruction);
 
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response: GenerateContentResponse = await getAi().models.generateContent({
+      model: 'gemini-3.8-flash',
       contents: prompt,
       ...(finalSystemInstruction && { config: { systemInstruction: finalSystemInstruction } }),
     });
 
     return response.text;
   } catch (error) {
-    console.error("Error executing Gemini prompt:", error);
+    console.warn("[GeminiService Notice]:", error);
     if (error instanceof Error) {
         return `AI通信中にエラーが発生しました: ${error.message}`;
     }
@@ -69,8 +72,8 @@ export const streamExecutePrompt = async (
   try {
     const finalSystemInstruction = composeFinalSystemInstruction(mode, prompt, customSystemInstruction);
 
-    const responseStream = await ai.models.generateContentStream({
-      model: 'gemini-2.5-flash',
+    const responseStream = await getAi().models.generateContentStream({
+      model: 'gemini-3.8-flash',
       contents: prompt,
       ...(finalSystemInstruction && { config: { systemInstruction: finalSystemInstruction } }),
     });
@@ -81,7 +84,7 @@ export const streamExecutePrompt = async (
       }
     }
   } catch (error) {
-    console.error("Error executing Gemini prompt stream:", error);
+    console.warn("[GeminiService Notice]:", error);
     if (error instanceof Error) {
       onChunk(`\n\nエラーが発生しました: ${error.message}`);
     } else {

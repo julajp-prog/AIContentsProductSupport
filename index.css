@@ -1,0 +1,25 @@
+/* Ensure dark-mode visible vertical & horizontal scrollbars across all browsers */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 #111827;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111827;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #374151;
+  border-radius: 4px;
+  border: 1px solid #1f2937;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+}

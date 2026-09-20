@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Prompt, ExecutionMode, SystemInstruction, LLMSettings, ProviderType, KnowledgeItem } from '../types';
-import { executePromptStreamUnified, getGeminiRecentRequestCount } from '../services/llmService';
+import { Prompt, ExecutionMode, SystemInstruction, LLMSettings, ProviderType, KnowledgeItem, LLMStatusMonitorState, ConnectionMode, HyperExpertSettings } from '../types';
+import { executePromptStreamUnified, getGeminiRecentRequestCount, fetchProviderModels } from '../services/llmService';
 import { formatKnowledgeContext } from '../services/knowledgeStorage';
+import { HyperExpertPanel } from './HyperExpertPanel';
 import { Spinner } from './common/Spinner';
 import { ICONS } from '../constants';
 
@@ -17,6 +18,9 @@ interface PromptEditorProps {
   onUpdateLLMSettings: (newSettings: LLMSettings) => void;
   knowledgeList: KnowledgeItem[];
   onOpenKnowledgeModal: () => void;
+  onStatusUpdate?: (status: Partial<LLMStatusMonitorState>) => void;
+  hyperExpertSettings: HyperExpertSettings;
+  onUpdateHyperExpertSettings: (newSettings: HyperExpertSettings) => void;
 }
 
 export const PromptEditor: React.FC<PromptEditorProps> = ({
@@ -28,8 +32,12 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
   onOpenInstructionsModal,
   llmSettings,
   onOpenLLMSettings,
+  onUpdateLLMSettings,
   knowledgeList,
   onOpenKnowledgeModal,
+  onStatusUpdate,
+  hyperExpertSettings,
+  onUpdateHyperExpertSettings,
 }) => {
   const [currentPrompt, setCurrentPrompt] = useState<Prompt | null>(prompt);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>(ExecutionMode.STRAIGHT);
@@ -45,6 +53,11 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
   // Attached Knowledge state for current prompt
   const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [isKnowledgeSectionOpen, setIsKnowledgeSectionOpen] = useState(false);
+  const [executionError, setExecutionError] = useState<{
+    providerId: ProviderType;
+    providerName: string;
+    message: string;
+  } | null>(null);
 
   // Determine current active provider & model for this prompt or global
   const effectiveProviderId: ProviderType = currentPrompt?.providerOverride || llmSettings.activeProvider;
@@ -55,6 +68,7 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
     setCurrentPrompt(prompt);
     setOutput('');
     setWaitCountdown(null);
+    setExecutionError(null);
     if (prompt?.systemInstructionId) {
       onSelectInstructionId(prompt.systemInstructionId);
     }
@@ -99,11 +113,12 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
     );
   }
 
-  const handleRun = async () => {
+  const executeWithProvider = async (overrideProvider?: ProviderType, overrideModel?: string) => {
     if (!currentPrompt.content.trim()) return;
     setIsLoading(true);
     setWaitCountdown(null);
     setOutput('');
+    setExecutionError(null);
 
     let finalInstruction: string | undefined = undefined;
     if (isSystemInstructionEnabled) {
@@ -113,9 +128,13 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
     // Format attached knowledge context
     const knowledgeContext = formatKnowledgeContext(selectedKnowledgeIds, knowledgeList);
 
+    const targetProviderId = overrideProvider || effectiveProviderId;
+    const baseConfig = llmSettings.providers[targetProviderId] || llmSettings.providers.gemini;
+    const targetModel = overrideModel || (overrideProvider ? baseConfig.selectedModel : effectiveModel);
+
     const providerConfigToUse = {
-      ...currentProviderConfig,
-      selectedModel: effectiveModel,
+      ...baseConfig,
+      selectedModel: targetModel,
     };
 
     await executePromptStreamUnified({
@@ -123,6 +142,7 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
       mode: executionMode,
       customSystemInstruction: finalInstruction,
       knowledgeContext: knowledgeContext || undefined,
+      hyperExpertSettings: hyperExpertSettings,
       providerConfig: providerConfigToUse,
       settings: llmSettings,
       onChunk: chunk => {
@@ -131,11 +151,90 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
       onWaitTick: remainingSec => {
         setWaitCountdown(remainingSec > 0 ? remainingSec : null);
       },
+      onStatusUpdate,
+      onError: (err, pConfig) => {
+        setExecutionError({
+          providerId: pConfig.id,
+          providerName: pConfig.name,
+          message: err.message,
+        });
+      },
     });
 
     setIsLoading(false);
     setWaitCountdown(null);
     setRecentGeminiCount(getGeminiRecentRequestCount());
+  };
+
+  const handleRun = () => {
+    executeWithProvider();
+  };
+
+  const handleSwitchToGeminiAndRun = () => {
+    const updatedPrompt: Prompt = {
+      ...currentPrompt,
+      providerOverride: 'gemini',
+      modelOverride: llmSettings.providers.gemini.selectedModel,
+    };
+    setCurrentPrompt(updatedPrompt);
+    onUpdatePrompt(updatedPrompt);
+    if (llmSettings.activeProvider !== 'gemini') {
+      onUpdateLLMSettings({
+        ...llmSettings,
+        activeProvider: 'gemini',
+      });
+    }
+    executeWithProvider('gemini', llmSettings.providers.gemini.selectedModel);
+  };
+
+  const handleResetToGemini38AndRun = () => {
+    const updatedSettings: LLMSettings = {
+      ...llmSettings,
+      providers: {
+        ...llmSettings.providers,
+        gemini: {
+          ...llmSettings.providers.gemini,
+          selectedModel: 'gemini-3.8-flash',
+        },
+      },
+    };
+    onUpdateLLMSettings(updatedSettings);
+
+    const updatedPrompt: Prompt = {
+      ...currentPrompt,
+      providerOverride: 'gemini',
+      modelOverride: 'gemini-3.8-flash',
+    };
+    setCurrentPrompt(updatedPrompt);
+    onUpdatePrompt(updatedPrompt);
+
+    setExecutionError(null);
+    executeWithProvider('gemini', 'gemini-3.8-flash');
+  };
+
+  const handleSwitchToProvider = (providerId: ProviderType) => {
+    const targetConfig = llmSettings.providers[providerId];
+    const updatedSettings: LLMSettings = {
+      ...llmSettings,
+      activeProvider: providerId,
+      providers: {
+        ...llmSettings.providers,
+        [providerId]: {
+          ...targetConfig,
+          enabled: true,
+        },
+      },
+    };
+    onUpdateLLMSettings(updatedSettings);
+
+    const updatedPrompt: Prompt = {
+      ...currentPrompt,
+      providerOverride: providerId,
+      modelOverride: targetConfig.selectedModel,
+    };
+    setCurrentPrompt(updatedPrompt);
+    onUpdatePrompt(updatedPrompt);
+    setExecutionError(null);
   };
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -198,10 +297,10 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
   const attachedKnowledgeItems = knowledgeList.filter(k => selectedKnowledgeIds.includes(k.id));
 
   return (
-    <div className="flex flex-col h-full p-4 gap-3 overflow-hidden bg-gray-900">
+    <div className="flex flex-col min-h-full p-4 gap-3 bg-gray-900">
       
       {/* Title Bar & Quick Stats */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-gray-800">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2 flex-grow min-w-0 w-full sm:w-auto">
           <span className="text-blue-400 p-1.5 bg-blue-950/60 rounded-lg border border-blue-800">
             {ICONS.prompt}
@@ -252,7 +351,7 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
       </div>
 
       {/* LLM Provider Selection & Wait Timer Bar */}
-      <div className="bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md space-y-2">
+      <div className="bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md space-y-2 flex-shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">
           
           {/* Left: LLM Provider & Model Quick Selectors */}
@@ -288,6 +387,60 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
                 </option>
               ))}
             </select>
+
+            {/* Direct vs Proxy Mode Quick Toggle (for Local LLMs like LM Studio, Ollama) */}
+            {(currentProviderConfig.category === 'local' || currentProviderConfig.id === 'lmstudio' || currentProviderConfig.id === 'ollama') && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentMode = currentProviderConfig.connectionMode || 'direct';
+                    const newMode: ConnectionMode = currentMode === 'direct' ? 'proxy' : 'direct';
+                    const updatedProvider = { ...currentProviderConfig, connectionMode: newMode };
+                    onUpdateLLMSettings({
+                      ...llmSettings,
+                      providers: {
+                        ...llmSettings.providers,
+                        [currentProviderConfig.id]: updatedProvider,
+                      },
+                    });
+                  }}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-mono font-bold border transition-colors ${
+                    (currentProviderConfig.connectionMode || 'direct') === 'proxy'
+                      ? 'bg-amber-950/80 text-amber-300 border-amber-600/70 hover:bg-amber-900'
+                      : 'bg-indigo-950/80 text-indigo-300 border-indigo-600/70 hover:bg-indigo-900'
+                  }`}
+                  title={`現在: ${(currentProviderConfig.connectionMode || 'direct').toUpperCase()} モード。クリックで Direct ↔ Proxy を即座に切替`}
+                >
+                  {(currentProviderConfig.connectionMode || 'direct') === 'proxy' ? '🔀 Proxy経由' : '⚡ Direct接続'}
+                </button>
+
+                {typeof window !== 'undefined' &&
+                  window.location.protocol === 'https:' &&
+                  (currentProviderConfig.baseUrl?.includes('localhost') || currentProviderConfig.baseUrl?.includes('127.0.0.1')) && (
+                    <button
+                      type="button"
+                      onClick={onOpenLLMSettings}
+                      className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-600/70 hover:bg-amber-900 transition-colors flex items-center gap-1"
+                      title="クラウド(HTTPS)環境からPCのhttp://localhostへの直接通信はブラウザのMixed Content保護で制限されます。クリックしてトンネルURL設定や詳細を確認"
+                    >
+                      <span>⚠️</span>
+                      <span className="hidden sm:inline">要トンネルURL</span>
+                    </button>
+                  )}
+              </>
+            )}
+
+            {/* Gemini API Isolation Shield (Guaranteed zero data leakage) */}
+            {!isGemini && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-700/60"
+                title={`${currentProviderConfig.name}でのみ処理中: Gemini APIへの漏洩はコードレベルで100%遮断されています`}
+              >
+                <span>🔒</span>
+                <span>Gemini完全隔離</span>
+              </span>
+            )}
 
             {/* Provider Settings Button */}
             <button
@@ -357,8 +510,16 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
         </div>
       </div>
 
+      {/* Hyper-Dimensional Expert (PATH Cognitive OS) Control Panel */}
+      <div className="flex-shrink-0">
+        <HyperExpertPanel
+          settings={hyperExpertSettings}
+          onUpdateSettings={onUpdateHyperExpertSettings}
+        />
+      </div>
+
       {/* System Instruction & Knowledge Base Selection Ribbon */}
-      <div className="bg-gray-850 rounded-xl border border-gray-750 p-2.5 shadow-sm space-y-2">
+      <div className="bg-gray-850 rounded-xl border border-gray-750 p-2.5 shadow-sm space-y-2 flex-shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           {/* Left: System Instruction Dropdown & Status */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -524,11 +685,11 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
       </div>
 
       {/* Main Split: Prompt Input & AI Output */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-grow min-h-0">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-grow min-h-[440px] pb-6">
         
         {/* Left: Prompt Content Editor */}
-        <div className="flex flex-col bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md">
-          <div className="flex justify-between items-center mb-2">
+        <div className="flex flex-col bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md min-h-[300px] lg:min-h-0">
+          <div className="flex justify-between items-center mb-2 flex-shrink-0">
             <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
               <span>{ICONS.edit}</span>
               <span>プロンプト入力</span>
@@ -542,13 +703,13 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
             value={currentPrompt.content}
             onChange={handleContentChange}
             placeholder="プロンプト本文を入力してください... (例: Note記事のリード文構成案、商品LPのキャッチコピー、競合リサーチなど)"
-            className="w-full flex-grow bg-gray-900 border border-gray-750 rounded-xl p-3 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-sans leading-relaxed"
+            className="w-full flex-grow bg-gray-900 border border-gray-750 rounded-xl p-3 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-sans leading-relaxed min-h-[220px] overflow-y-auto"
           />
         </div>
 
         {/* Right: Output Stream & Markdown Viewer */}
-        <div className="flex flex-col bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md min-h-0">
-          <div className="flex justify-between items-center mb-2">
+        <div className="flex flex-col bg-gray-850 rounded-xl border border-gray-750 p-3 shadow-md min-h-[360px] lg:min-h-0">
+          <div className="flex justify-between items-center mb-2 flex-shrink-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
                 <span className="text-cyan-400">{ICONS.sparkles}</span>
@@ -564,14 +725,87 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
             {output && (
               <button
                 onClick={handleCopyOutput}
-                className="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 border border-gray-700"
+                className="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 border border-gray-700 cursor-pointer"
               >
                 {hasCopiedOutput ? '✓ コピー完了' : `${ICONS.copy} コピー`}
               </button>
             )}
           </div>
 
-          <div className="flex-grow bg-gray-900 rounded-xl p-4 overflow-y-auto border border-gray-750 text-gray-200 text-sm leading-relaxed whitespace-pre-wrap font-sans">
+          {executionError && (
+            <div className="mb-3 p-3.5 bg-rose-950/85 border border-rose-600/70 rounded-xl text-rose-200 text-xs space-y-2.5 shadow-lg animate-in fade-in duration-200 flex-shrink-0">
+              <div className="flex items-center justify-between font-bold text-sm text-rose-300">
+                <span className="flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>[{executionError.providerName}] 接続エラー</span>
+                </span>
+                <button
+                  onClick={() => setExecutionError(null)}
+                  className="text-rose-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-rose-900 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="whitespace-pre-wrap leading-relaxed text-rose-100 font-sans text-xs bg-rose-900/30 p-2.5 rounded-lg border border-rose-800/40">
+                {executionError.message}
+              </p>
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
+                {executionError.providerId === 'gemini' && (
+                  <button
+                    onClick={handleResetToGemini38AndRun}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-lg shadow-md shadow-emerald-900/40 transition-all flex items-center gap-1.5 text-xs cursor-pointer"
+                  >
+                    <span>🔄</span>
+                    <span>最新推奨モデル「gemini-3.8-flash」に更新して再実行</span>
+                  </button>
+                )}
+
+                {executionError.providerId !== 'gemini' && (
+                  <button
+                    onClick={handleSwitchToGeminiAndRun}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-md shadow-blue-900/40 transition-all flex items-center gap-1.5 text-xs cursor-pointer"
+                  >
+                    <span>⚡</span>
+                    <span>Google Geminiに切り替えて即座に実行</span>
+                  </button>
+                )}
+
+                {executionError.providerId === 'gemini' && (
+                  <>
+                    <button
+                      onClick={() => handleSwitchToProvider('lmstudio')}
+                      className="px-3 py-1.5 bg-purple-900/70 hover:bg-purple-800 text-purple-200 rounded-lg transition-colors border border-purple-700/60 text-xs flex items-center gap-1 cursor-pointer"
+                      title="お使いのPCで起動中のLM Studioへ切り替えます"
+                    >
+                      <span>💻</span>
+                      <span>LM Studio (ローカル) に切替</span>
+                    </button>
+                    <button
+                      onClick={() => handleSwitchToProvider('openrouter')}
+                      className="px-3 py-1.5 bg-cyan-900/70 hover:bg-cyan-800 text-cyan-200 rounded-lg transition-colors border border-cyan-700/60 text-xs flex items-center gap-1 cursor-pointer"
+                      title="OpenRouterへ切り替えます"
+                    >
+                      <span>🌐</span>
+                      <span>OpenRouter に切替</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  onClick={onOpenLLMSettings}
+                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg transition-colors border border-gray-700 text-xs flex items-center gap-1 cursor-pointer"
+                >
+                  <span>⚙️</span>
+                  <span>プロバイダー設定（APIキー・モデル確認）</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div
+            tabIndex={0}
+            className="flex-grow bg-gray-900 rounded-xl p-4 overflow-y-auto border border-gray-750 text-gray-200 text-sm leading-relaxed whitespace-pre-wrap font-sans min-h-[260px] focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+          >
             {output ? (
               output
             ) : (

@@ -1,7 +1,8 @@
 import React from 'react';
-import { Project, Prompt, SystemInstruction, LLMSettings, KnowledgeItem } from '../types';
+import { Project, Prompt, SystemInstruction, LLMSettings, KnowledgeItem, LLMStatusMonitorState, HyperExpertSettings } from '../types';
 import { ProjectDashboard } from './ProjectDashboard';
 import { PromptEditor } from './PromptEditor';
+import { LLMNanoStatusMonitor } from './LLMNanoStatusMonitor';
 import { ICONS } from '../constants';
 
 type ActiveView = 'dashboard' | 'editor';
@@ -24,6 +25,10 @@ interface MainContentProps {
   onUpdateLLMSettings: (newSettings: LLMSettings) => void;
   knowledgeList: KnowledgeItem[];
   onOpenKnowledgeModal: () => void;
+  monitorState: LLMStatusMonitorState;
+  onStatusUpdate: (status: Partial<LLMStatusMonitorState>) => void;
+  hyperExpertSettings: HyperExpertSettings;
+  onUpdateHyperExpertSettings: (newSettings: HyperExpertSettings) => void;
 }
 
 export const MainContent: React.FC<MainContentProps> = ({ 
@@ -44,6 +49,10 @@ export const MainContent: React.FC<MainContentProps> = ({
   onUpdateLLMSettings,
   knowledgeList,
   onOpenKnowledgeModal,
+  monitorState,
+  onStatusUpdate,
+  hyperExpertSettings,
+  onUpdateHyperExpertSettings,
 }) => {
   if (!activeProject) {
     return (
@@ -86,19 +95,46 @@ export const MainContent: React.FC<MainContentProps> = ({
           />
         </div>
 
-        {/* Current Active LLM Provider, Knowledge Base & System Instruction Quick pills */}
+        {/* Current Active LLM Provider, Knowledge Base & System Instruction Quick pills + Nano Status Monitor */}
         <div className="flex items-center gap-2 py-1.5 flex-wrap">
-          {/* LLM Provider Pill */}
+          {/* Constant Live Status Monitor (極小ステータスモニター) */}
+          <LLMNanoStatusMonitor
+            monitorState={monitorState}
+            settings={llmSettings}
+            onUpdateSettings={onUpdateLLMSettings}
+            onOpenSettingsModal={onOpenLLMSettings}
+          />
+
+          {/* Hyper-Dimensional Expert Quick Pill */}
           <button
-            onClick={onOpenLLMSettings}
-            className="flex items-center gap-1.5 px-3 py-1 bg-gray-800/90 hover:bg-gray-750 text-xs text-gray-200 rounded-full border border-gray-700 transition-colors"
-            title="LLMプロバイダー設定を開く"
+            onClick={() => {
+              onUpdateHyperExpertSettings({
+                ...hyperExpertSettings,
+                isEnabled: !hyperExpertSettings.isEnabled,
+              });
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded-full border transition-all ${
+              hyperExpertSettings.isEnabled
+                ? 'bg-gradient-to-r from-indigo-950 to-purple-950 text-indigo-200 border-indigo-500 shadow-sm shadow-indigo-950'
+                : 'bg-gray-800/90 text-gray-400 border-gray-700 hover:text-gray-200'
+            }`}
+            title="超高次元エキスパート（PATH COGNITIVE OS）モードの切り替え"
           >
-            <span className="text-cyan-400">⚡</span>
-            <span className="font-semibold text-gray-400">LLM:</span>
-            <span className="text-cyan-300 font-medium truncate max-w-[120px]">
-              {activeProvider.name}
-            </span>
+            <span>🔮</span>
+            <span className="font-semibold text-gray-300">超次元Expert:</span>
+            {hyperExpertSettings.isEnabled ? (
+              <span className="text-indigo-300 font-bold flex items-center gap-1">
+                <span>ON</span>
+                <span className="text-[10px] px-1 bg-indigo-900/80 rounded border border-indigo-700">
+                  {hyperExpertSettings.resonanceLevel === 'ri' ? '全解放' : hyperExpertSettings.resonanceLevel === 'ha' ? '連動(破)' : '型(守)'}
+                </span>
+                <span className="text-[10px] text-indigo-400 font-mono">
+                  ({Object.values(hyperExpertSettings.activeDimensions).filter(Boolean).length}/5)
+                </span>
+              </span>
+            ) : (
+              <span className="text-gray-500">OFF</span>
+            )}
           </button>
 
           {/* Knowledge Base Quick Pill */}
@@ -129,7 +165,7 @@ export const MainContent: React.FC<MainContentProps> = ({
         </div>
       </div>
     
-      <div className="flex-grow bg-gray-900 overflow-hidden">
+      <div className="flex-grow bg-gray-900 min-h-0 overflow-y-auto">
         {activeView === 'dashboard' && (
           <ProjectDashboard 
             project={activeProject}
@@ -153,6 +189,9 @@ export const MainContent: React.FC<MainContentProps> = ({
             onUpdateLLMSettings={onUpdateLLMSettings}
             knowledgeList={knowledgeList}
             onOpenKnowledgeModal={onOpenKnowledgeModal}
+            onStatusUpdate={onStatusUpdate}
+            hyperExpertSettings={hyperExpertSettings}
+            onUpdateHyperExpertSettings={onUpdateHyperExpertSettings}
           />
         )}
       </div>
