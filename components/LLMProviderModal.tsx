@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { LLMSettings, LLMProviderConfig, ProviderType, GeminiRateLimitSettings, ConnectionMode } from '../types';
+import { LLMSettings, LLMProviderConfig, ProviderType, GeminiRateLimitSettings, ConnectionMode, JsonMode } from '../types';
 import { testProviderConnection, ConnectionTestResult, getGeminiRecentRequestCount, fetchProviderModels } from '../services/llmService';
+import { runApiJsonComplianceTest, ApiJsonTestResult, formatDebugReport } from '../services/jsonComplianceService';
 import { ICONS } from '../constants';
 import { Spinner } from './common/Spinner';
 
@@ -22,6 +23,9 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
   const [localRateLimit, setLocalRateLimit] = useState<GeminiRateLimitSettings>(settings.geminiRateLimit);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
+  const [isTestingJson, setIsTestingJson] = useState(false);
+  const [jsonTestResult, setJsonTestResult] = useState<ApiJsonTestResult | null>(null);
+  const [copiedJsonResult, setCopiedJsonResult] = useState(false);
   const [customModelInput, setCustomModelInput] = useState('');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
@@ -79,6 +83,46 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
       ...prev,
       [selectedProviderId]: updatedConfig,
     }));
+  };
+
+  // Run JSON format compliance test with custom test message
+  const handleRunJsonTest = async () => {
+    setIsTestingJson(true);
+    setJsonTestResult(null);
+    try {
+      const result = await runApiJsonComplianceTest(currentProvider);
+      setJsonTestResult(result);
+    } catch (err: any) {
+      setJsonTestResult({
+        success: false,
+        jsonValidationStatus: 'invalid',
+        latencyMs: 0,
+        errorMessage: err?.message || 'テスト実行エラー',
+      });
+    } finally {
+      setIsTestingJson(false);
+    }
+  };
+
+  const handleCopyJsonTestReport = () => {
+    if (!jsonTestResult) return;
+    const report = `【API対JSON適合性チェック結果】
+プロバイダー: ${currentProvider.name} (${currentProvider.id})
+モデル: ${currentProvider.selectedModel}
+JSON伝送モード: ${currentProvider.jsonMode || 'auto'}
+自動修復: ${currentProvider.autoRepairJson ? 'ON' : 'OFF'}
+合否: ${jsonTestResult.success ? '合格 (PASS)' : '不合格 (FAIL)'}
+構文ステータス: ${jsonTestResult.jsonValidationStatus}
+崩れ修復実行: ${jsonTestResult.wasRepaired ? 'あり (自動補正成功)' : 'なし (直接適合)'}
+response_format許容: ${jsonTestResult.responseFormatAccepted ? '対応' : '非対応 (フォールバック適用)'}
+応答時間: ${jsonTestResult.latencyMs}ms
+${jsonTestResult.errorMessage ? `エラー: ${jsonTestResult.errorMessage}\n` : ''}
+${jsonTestResult.parsedObject ? `パース結果サンプル: ${JSON.stringify(jsonTestResult.parsedObject, null, 2)}\n` : ''}
+生出力:
+${jsonTestResult.rawOutput || 'なし'}`;
+    navigator.clipboard.writeText(report);
+    setCopiedJsonResult(true);
+    setTimeout(() => setCopiedJsonResult(false), 2500);
   };
 
   const handleAddCustomModel = () => {
@@ -155,8 +199,8 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
     },
     {
       key: 'local',
-      label: '💻 PCローカルLLM / オンプレミス',
-      ids: ['ollama', 'lmstudio', 'custom'],
+      label: '💻 PCローカルLLM / オンプレミス推論',
+      ids: ['lmstudio', 'lmstudio_bionic', 'unsloth', 'openai_compat', 'ollama', 'custom'],
     },
   ];
 
@@ -409,8 +453,8 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
 
             {/* API KEY & ENDPOINT INPUTS */}
             <div className="space-y-4">
-              {/* Local Provider Connection Mode Switcher (LM Studio / Ollama) */}
-              {(currentProvider.id === 'lmstudio' || currentProvider.id === 'ollama') && (
+              {/* Local Provider Connection Mode Switcher (LM Studio, Unsloth, OpenAI Compat, Ollama) */}
+              {(currentProvider.id === 'lmstudio' || currentProvider.id === 'lmstudio_bionic' || currentProvider.id === 'unsloth' || currentProvider.id === 'openai_compat' || currentProvider.id === 'ollama') && (
                 <div className="bg-gray-850 p-4 rounded-xl border border-gray-750 space-y-3">
                   <div className="flex justify-between items-center">
                     <label className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -497,13 +541,25 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
                       <div>・<strong>Direct接続時:</strong> <code>OLLAMA_ORIGINS=&quot;*&quot; ollama serve</code> でCORSを許可してください。</div>
                     </div>
                   )}
-                  {currentProvider.id === 'lmstudio' && (
+                  {(currentProvider.id === 'lmstudio' || currentProvider.id === 'lmstudio_bionic') && (
                     <div className="text-[11px] text-cyan-300/90 mt-1.5 leading-relaxed bg-cyan-950/30 p-2.5 rounded-lg border border-cyan-800/40 space-y-1">
-                      <div>💡 <strong>LM Studioの設定と通信ガイド:</strong></div>
+                      <div>💡 <strong>{currentProvider.name} の設定と通信ガイド:</strong></div>
                       <div>1. LM Studioの「Local Server」タブを開き、モデルをロードして「Start Server」を押してください。</div>
-                      <div>2. <strong>クラウドプレビュー（HTTPS）の場合:</strong> ブラウザのMixed Content保護によりローカルPCへの直接通信は制限されます。ngrok等のHTTPSトンネル（例: <code>https://xxxx.ngrok-free.app/v1</code>）をBase URLに指定するか、本アプリをローカル（<code>npm run dev</code>）で実行してください。</div>
-                      <div>3. <strong>ローカル実行（npm run dev）の場合:</strong> 「Proxy経由」を選択するか、LM Studioの「Enable CORS」をONにすればスムーズに通信できます。</div>
-                      <div>4. 今すぐプロンプトを実行したい場合は、右上のプロバイダーで「Google Gemini」を選択してください。</div>
+                      <div>2. <strong>Bionic構造・JSON崩れ対策:</strong> 本アプリでは構造化プロンプトと自動構文修復（Auto-Repair）が常時稼働し、LLM特有のJSON形式崩れをリアルタイム補正します。</div>
+                      <div>3. <strong>ローカル実行時:</strong> 「Proxy経由」を選択するか、LM Studioの「Enable CORS」をONにすればスムーズに通信できます。</div>
+                    </div>
+                  )}
+                  {currentProvider.id === 'unsloth' && (
+                    <div className="text-[11px] text-emerald-300/90 mt-1.5 leading-relaxed bg-emerald-950/30 p-2.5 rounded-lg border border-emerald-800/40 space-y-1">
+                      <div>💡 <strong>Unsloth Studio / vLLM 推論サーバーの接続ガイド:</strong></div>
+                      <div>・UnslothファインチューニングモデルやvLLM高速推論インスタンスのOpenAI互換エンドポイント（例: <code>http://localhost:8000/v1</code>）と連携します。</div>
+                      <div>・高速ストリーミングおよびJSON構造出力の自動修復に対応しています。</div>
+                    </div>
+                  )}
+                  {currentProvider.id === 'openai_compat' && (
+                    <div className="text-[11px] text-indigo-300/90 mt-1.5 leading-relaxed bg-indigo-950/30 p-2.5 rounded-lg border border-indigo-800/40 space-y-1">
+                      <div>💡 <strong>汎用OpenAI互換エンドポイント:</strong></div>
+                      <div>・LocalAI、text-generation-webui、llama.cpp server、TGI、FastChat等のOpenAI仕様に準拠したあらゆるローカル・クラウドサーバーと相互接続可能です。</div>
                     </div>
                   )}
                 </div>
@@ -564,6 +620,160 @@ export const LLMProviderModal: React.FC<LLMProviderModalProps> = ({
                   {isTesting ? <Spinner /> : <span>⚡</span>}
                   <span>{isTesting ? '通信テスト中...' : '接続テスト & モデル取得'}</span>
                 </button>
+              </div>
+
+              {/* JSON FORMAT & COMPLIANCE SECTION: SPECIFICALLY FOR LM-STUDIO, UNSLOTH, OPENAI-COMPAT */}
+              <div className="bg-gradient-to-r from-cyan-950/40 via-blue-950/30 to-gray-850 p-4 rounded-xl border border-cyan-800/60 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🧪</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                        <span>対API JSON形式・適合性徹底チェック & 崩れ自動修復</span>
+                        <span className="text-[10px] px-2 py-0.2 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-750 font-mono">
+                          LM Studio / Unsloth / OpenAI互換
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-gray-400">
+                        テストメッセージをAPIへ送信し、response_format対応状況、構文の崩れ（JSON崩れ）、自動修復の整合性を徹底検証します。
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleRunJsonTest}
+                    disabled={isTestingJson}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-md shadow-cyan-950 flex items-center gap-1.5 transition-all disabled:opacity-50 shrink-0"
+                  >
+                    {isTestingJson ? <Spinner /> : <span>📨</span>}
+                    <span>{isTestingJson ? 'JSONテスト送信中...' : 'テストメッセージ送信 & 適合性検証'}</span>
+                  </button>
+                </div>
+
+                {/* JSON Mode & Repair Settings */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="bg-gray-900/80 p-3 rounded-xl border border-gray-750">
+                    <label className="text-[11px] font-bold text-gray-300 block mb-1">
+                      JSON伝送モード (response_format)
+                    </label>
+                    <select
+                      value={currentProvider.jsonMode || 'auto'}
+                      onChange={e => handleUpdateCurrentProvider({ jsonMode: e.target.value as JsonMode })}
+                      className="w-full bg-gray-800 border border-gray-700 text-xs text-white rounded-lg px-2.5 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    >
+                      <option value="auto">auto - 自動判定（API仕様に応じて動的最適化）</option>
+                      <option value="strict">strict - 強制（response_format: &#123;type: "json_object"&#125;）</option>
+                      <option value="prompt_only">prompt_only - プロンプト強制のみ（未対応推論サーバー用）</option>
+                    </select>
+                    <div className="text-[10px] text-gray-500 mt-1">
+                      ※ response_format未対応のローカル推論サーバーでは「prompt_only」が最も安全です。
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900/80 p-3 rounded-xl border border-gray-750 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-gray-300">
+                        JSON崩れ自動修復 (Auto Repair)
+                      </label>
+                      <input
+                        type="checkbox"
+                        checked={currentProvider.autoRepairJson ?? true}
+                        onChange={e => handleUpdateCurrentProvider({ autoRepairJson: e.target.checked })}
+                        className="w-4 h-4 accent-cyan-500 rounded cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1 leading-relaxed">
+                      Markdown囲み（```json）、末尾カンマ、クォート漏れ、未閉じ括弧などを構文レベルでリアルタイム検知・自動修復します。
+                    </p>
+                  </div>
+                </div>
+
+                {/* JSON Compliance Test Result Display */}
+                {jsonTestResult && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs leading-relaxed space-y-2 ${
+                      jsonTestResult.success
+                        ? 'bg-teal-950/40 border-teal-700/80 text-teal-200'
+                        : 'bg-rose-950/40 border-rose-700/80 text-rose-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold text-sm">
+                        <span>{jsonTestResult.success ? '🟢' : '🔴'}</span>
+                        <span>
+                          {jsonTestResult.success
+                            ? '対API JSON形式適合性チェック: 合格 (PASS)'
+                            : '対API JSON形式適合性チェック: 要確認 (FAIL)'}
+                        </span>
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-black/40">
+                          {jsonTestResult.latencyMs}ms
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyJsonTestReport}
+                        className="px-2.5 py-1 rounded text-[11px] font-semibold bg-gray-800 hover:bg-gray-700 text-white flex items-center gap-1 shadow transition-colors"
+                      >
+                        <span>{copiedJsonResult ? '✓' : '📋'}</span>
+                        <span>{copiedJsonResult ? 'コピー完了' : '診断結果をコピー'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono pt-1">
+                      <div className="bg-black/30 p-2 rounded">
+                        <span className="text-gray-400 block text-[10px]">構文適合ステータス</span>
+                        <span className={`font-bold ${
+                          jsonTestResult.jsonValidationStatus === 'valid'
+                            ? 'text-teal-300'
+                            : jsonTestResult.jsonValidationStatus === 'repaired'
+                            ? 'text-amber-300'
+                            : 'text-rose-300'
+                        }`}>
+                          {jsonTestResult.jsonValidationStatus === 'valid' ? '完全適合 (Valid)' : jsonTestResult.jsonValidationStatus === 'repaired' ? '崩れ修復成功 (Repaired)' : '構文エラー (Invalid)'}
+                        </span>
+                      </div>
+
+                      <div className="bg-black/30 p-2 rounded">
+                        <span className="text-gray-400 block text-[10px]">response_format</span>
+                        <span className="text-cyan-300 font-bold">
+                          {jsonTestResult.responseFormatAccepted ? '対応 (Accepted)' : '非対応 (Fallback)'}
+                        </span>
+                      </div>
+
+                      <div className="bg-black/30 p-2 rounded">
+                        <span className="text-gray-400 block text-[10px]">崩れ自動修復</span>
+                        <span className="text-purple-300 font-bold">
+                          {jsonTestResult.wasRepaired ? '実行済 (補正成功)' : '不要 (直接完全)'}
+                        </span>
+                      </div>
+
+                      <div className="bg-black/30 p-2 rounded">
+                        <span className="text-gray-400 block text-[10px]">パース検証</span>
+                        <span className="text-emerald-300 font-bold">
+                          {jsonTestResult.parsedObject ? 'オブジェクト化成功' : '失敗'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {jsonTestResult.errorMessage && (
+                      <p className="text-rose-300 text-[11px] bg-black/40 p-2 rounded font-mono">
+                        {jsonTestResult.errorMessage}
+                      </p>
+                    )}
+
+                    {jsonTestResult.parsedObject && (
+                      <details className="mt-2 text-[10px] font-mono bg-black/40 p-2 rounded">
+                        <summary className="cursor-pointer text-gray-400 hover:text-white font-sans font-bold">
+                          ▶ パース済みJSONオブジェクトの内容を確認
+                        </summary>
+                        <pre className="mt-1.5 text-gray-200 overflow-x-auto whitespace-pre-wrap max-h-36">
+                          {JSON.stringify(jsonTestResult.parsedObject, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Test Result Message Box */}

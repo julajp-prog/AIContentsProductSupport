@@ -137,6 +137,19 @@ export const MainContent: React.FC<MainContentProps> = ({
             )}
           </button>
 
+          {/* Primary Resource Hub Quick Pill */}
+          <button
+            onClick={() => {
+              setActiveView('editor');
+            }}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-gray-800/90 hover:bg-cyan-950/70 text-xs text-gray-200 rounded-full border border-gray-750 hover:border-cyan-700 transition-colors"
+            title="一次リソース特定・アクセス強化ハブ（GitHub, HuggingFace, Reddit, ComfyUI, BigTech, 論文, Zenn/Qiita）"
+          >
+            <span className="text-cyan-400">🔬</span>
+            <span className="font-semibold text-gray-400">一次リソース:</span>
+            <span className="text-cyan-300 font-medium">8領域検証</span>
+          </button>
+
           {/* Knowledge Base Quick Pill */}
           <button
             onClick={onOpenKnowledgeModal}

@@ -7,6 +7,7 @@ import {
   LLMStatusMonitorState,
   ConnectionMode,
   HyperExpertSettings,
+  LLMErrorDebugInfo,
 } from '../types';
 import {
   formatForGemini,
@@ -16,6 +17,7 @@ import {
   assertGeminiIsolation,
 } from './llmBridge';
 import { formatHyperExpertPrompt } from './hyperExpertService';
+import { cleanAndRepairJson, formatDebugReport } from './jsonComplianceService';
 
 // In-memory rate limiting history for Gemini
 let geminiRequestTimestamps: number[] = [];
@@ -99,6 +101,32 @@ export const getSystemInstructionForMode = (
     case ExecutionMode.RESEARCH:
       return `【リサーチ強化モード指示】
 まず、ユーザーの入力プロンプトの背景、市場トレンド、関連する専門用語や事例を多角的に深くリサーチ・分析してください。そのリサーチ結果と深い知見を踏まえた上で、ユーザーの元の要望に対して圧倒的な解像度と具体性を持った最高水準のアウトプットを作成してください。
+元のプロンプト: "${originalPrompt}"`;
+    case ExecutionMode.PRIMARY_RESOURCE:
+      return `【一次リソース特定・検証モード指示（Primary Source Verification Protocol）】
+二次情報、まとめ記事、推測、ハルシネーションを厳格に排除し、以下の「一次リソース（Primary Resources）」に直接遡って確認・特定・検証した上で回答してください。
+
+■ 準拠すべき一次リソース対象：
+1. 大手LLM/BigTech元会社（OpenAI, Google AI/DeepMind, Anthropic, Meta AI, Mistral等）の公式API仕様書、System Card、公式発表
+2. Hugging Face公式（Model Card, config.json, 公式Leaderboard, Papers）
+3. GitHub OSSリポジトリ（公式コードベース、関数シグネチャ、README、Issues/Discussions、Release Notes）
+4. ComfyUI（公式リポジトリ、Custom Node実装、公式ノード仕様、Civitaiモデル原典、Workflow JSON仕様）
+5. Agent系フレームワーク（LangGraph, AutoGen, CrewAI, LlamaIndex, MCP等）の公式最新ドキュメント
+6. 開発者一次コミュニティ（Reddit r/LocalLLaMA, r/MachineLearning, r/ComfyUI等）での実機検証・再現レポート
+7. 研究発表・論文原典（arXiv ID、NeurIPS/ICLR/CVPR採択論文、数式・理論定義）
+8. 国内エンジニア一次発信（Zenn, Qiitaにおける実機トラブルシューティング・環境構築ログ）
+
+■ 出力フォーマット規定：
+必ず以下の構造を含めて回答してください：
+①【特定された一次リソース一覧】:
+  - リソース名 / 発行元 / カテゴリ / 公式URLまたはリポジトリ名(\`owner/repo\`)またはarXiv ID / バージョン
+②【一次情報に基づく仕様・回答（Verified Facts）】:
+  - 原典の仕様・コード・公式パラメータに基づく高解像度な解説・成果物
+③【二次情報・俗説との乖離・ハマりどころ（Pitfalls & Notes）】:
+  - 伝言ゲームによる誤認、古いバージョンとの非互換、公式未推奨事項
+④【一次リソース追試・再現手順（Reproduction & Verification）】:
+  - ユーザーが手元で再現・確認するための公式コマンド、APIコード、またはワークフロー設定
+
 元のプロンプト: "${originalPrompt}"`;
     case ExecutionMode.IMPROVE:
       return `【改善・洗練モード指示】
@@ -373,7 +401,8 @@ export const fetchProviderModels = async (
       return provider.availableModels;
     }
 
-    case 'lmstudio': {
+    case 'lmstudio':
+    case 'lmstudio_bionic': {
       const isProxy = provider.connectionMode === 'proxy';
       const endpoint = isProxy ? '/api/proxy/lmstudio/v1/models' : `${provider.baseUrl || 'http://localhost:1234'}/v1/models`;
       try {
@@ -385,6 +414,41 @@ export const fetchProviderModels = async (
         }
       } catch (e) {
         console.warn('LM Studio fetchProviderModels error:', e);
+      }
+      return provider.availableModels;
+    }
+
+    case 'unsloth': {
+      const isProxy = provider.connectionMode === 'proxy';
+      const endpoint = isProxy ? '/api/proxy/unsloth/models' : `${(provider.baseUrl || 'http://localhost:8000/v1').replace(/\/$/, '')}/models`;
+      try {
+        const res = await fetch(endpoint);
+        if (res.ok) {
+          const data = await res.json();
+          const models = (data.data || []).map((m: any) => m.id).filter(Boolean);
+          return models.length > 0 ? models : provider.availableModels;
+        }
+      } catch (e) {
+        console.warn('Unsloth fetchProviderModels error:', e);
+      }
+      return provider.availableModels;
+    }
+
+    case 'openai_compat':
+    case 'custom': {
+      const isProxy = provider.connectionMode === 'proxy';
+      const endpoint = isProxy ? '/api/proxy/openai-compat/models' : `${(provider.baseUrl || 'http://localhost:8000/v1').replace(/\/$/, '')}/models`;
+      const headers: Record<string, string> = {};
+      if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+      try {
+        const res = await fetch(endpoint, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          const models = (data.data || []).map((m: any) => m.id).filter(Boolean);
+          return models.length > 0 ? models : provider.availableModels;
+        }
+      } catch (e) {
+        console.warn('OpenAI compat fetchProviderModels error:', e);
       }
       return provider.availableModels;
     }
@@ -575,7 +639,8 @@ export const testProviderConnection = async (
         }
       }
 
-      case 'lmstudio': {
+      case 'lmstudio':
+      case 'lmstudio_bionic': {
         const isLocalHost =
           typeof window !== 'undefined' &&
           (window.location.hostname === 'localhost' ||
@@ -612,7 +677,7 @@ export const testProviderConnection = async (
               success: false,
               latencyMs,
               models: [],
-              message: `⚠️ LM Studioサーバー(ポート1234)に接続できましたが、モデルがロードされていません。LM Studio上部の「Select a model to load」からモデルを選択・ロードしてください。`,
+              message: `⚠️ ${provider.name}サーバー(ポート1234)に接続できましたが、モデルがロードされていません。LM Studio上部の「Select a model to load」からモデルを選択・ロードしてください。`,
               effectiveMode: isProxy ? 'proxy' : 'direct',
             };
           }
@@ -621,7 +686,7 @@ export const testProviderConnection = async (
             success: true,
             latencyMs,
             models: fetchedModels,
-            message: `LM Studio接続成功 [${isProxy ? 'Proxy経由' : 'Direct直接'}] (${latencyMs}ms) - ロード中モデル: ${fetchedModels.join(', ')}`,
+            message: `${provider.name}接続成功 [${isProxy ? 'Proxy経由' : 'Direct直接'}] (${latencyMs}ms) - ロード中モデル: ${fetchedModels.join(', ')}`,
             effectiveMode: isProxy ? 'proxy' : 'direct',
           };
         } catch (primaryErr: any) {
@@ -650,8 +715,122 @@ export const testProviderConnection = async (
             }
           }
           throw new Error(
-            `LM Studio接続失敗 (${primaryEndpoint}): ${primaryErr.message}。\n` +
+            `${provider.name}接続失敗 (${primaryEndpoint}): ${primaryErr.message}。\n` +
             `【確認点】LM Studioで「Local Server」タブを開き、モデルをロードして「Start Server」を押しているか確認してください。`
+          );
+        }
+      }
+
+      case 'unsloth': {
+        const isLocalHost =
+          typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' ||
+           window.location.hostname === '127.0.0.1' ||
+           window.location.hostname === '0.0.0.0');
+
+        const isProxy = provider.connectionMode === 'proxy';
+        const primaryEndpoint = resolveEndpoint(provider, 'models').url;
+        const headers: Record<string, string> = {};
+        if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+
+        try {
+          const res = await fetch(primaryEndpoint, { method: 'GET', headers });
+          const latencyMs = Date.now() - startTime;
+          if (!res.ok) {
+            const errRaw = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status}: ${errRaw || res.statusText}`);
+          }
+          const data = await res.json();
+          const fetchedModels: string[] = (data.data || []).map((m: any) => m.id).filter(Boolean);
+
+          return {
+            success: true,
+            latencyMs,
+            models: fetchedModels.length > 0 ? fetchedModels : provider.availableModels,
+            message: `Unsloth Studio接続成功 [${isProxy ? 'Proxy経由' : 'Direct直接'}] (${latencyMs}ms) - 認識モデル: ${fetchedModels.join(', ') || 'OK'}`,
+            effectiveMode: isProxy ? 'proxy' : 'direct',
+          };
+        } catch (primaryErr: any) {
+          if (!isProxy && isLocalHost) {
+            try {
+              const proxyRes = await fetch('/api/proxy/unsloth/models', { method: 'GET', headers });
+              if (proxyRes.ok) {
+                const proxyData = await proxyRes.json();
+                const fetchedModels: string[] = (proxyData.data || []).map((m: any) => m.id).filter(Boolean);
+                const latencyMs = Date.now() - startTime;
+                return {
+                  success: true,
+                  latencyMs,
+                  models: fetchedModels.length > 0 ? fetchedModels : provider.availableModels,
+                  message: `Direct接続失敗後、Proxy経由 (/api/proxy/unsloth) で接続に成功しました！「Proxy経由」モードへの切替を推奨します。`,
+                  effectiveMode: 'proxy',
+                  suggestedMode: 'proxy',
+                };
+              }
+            } catch {
+              // ignore
+            }
+          }
+          throw new Error(
+            `Unsloth Studio接続失敗 (${primaryEndpoint}): ${primaryErr.message}。\n` +
+            `【確認点】Unsloth Studio / vLLM推論サーバーが起動しているか確認してください (デフォルトポート: 8000)。`
+          );
+        }
+      }
+
+      case 'openai_compat':
+      case 'custom': {
+        const isLocalHost =
+          typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' ||
+           window.location.hostname === '127.0.0.1' ||
+           window.location.hostname === '0.0.0.0');
+
+        const isProxy = provider.connectionMode === 'proxy';
+        const primaryEndpoint = resolveEndpoint(provider, 'models').url;
+        const headers: Record<string, string> = {};
+        if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+
+        try {
+          const res = await fetch(primaryEndpoint, { method: 'GET', headers });
+          const latencyMs = Date.now() - startTime;
+          if (!res.ok) {
+            const errRaw = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status}: ${errRaw || res.statusText}`);
+          }
+          const data = await res.json();
+          const fetchedModels: string[] = (data.data || []).map((m: any) => m.id).filter(Boolean);
+
+          return {
+            success: true,
+            latencyMs,
+            models: fetchedModels.length > 0 ? fetchedModels : provider.availableModels,
+            message: `${provider.name}接続成功 [${isProxy ? 'Proxy経由' : 'Direct直接'}] (${latencyMs}ms)`,
+            effectiveMode: isProxy ? 'proxy' : 'direct',
+          };
+        } catch (primaryErr: any) {
+          if (!isProxy && isLocalHost) {
+            try {
+              const proxyRes = await fetch('/api/proxy/openai-compat/models', { method: 'GET', headers });
+              if (proxyRes.ok) {
+                const proxyData = await proxyRes.json();
+                const fetchedModels: string[] = (proxyData.data || []).map((m: any) => m.id).filter(Boolean);
+                const latencyMs = Date.now() - startTime;
+                return {
+                  success: true,
+                  latencyMs,
+                  models: fetchedModels.length > 0 ? fetchedModels : provider.availableModels,
+                  message: `Direct接続失敗後、Proxy経由 (/api/proxy/openai-compat) で接続に成功しました！`,
+                  effectiveMode: 'proxy',
+                  suggestedMode: 'proxy',
+                };
+              }
+            } catch {
+              // ignore
+            }
+          }
+          throw new Error(
+            `${provider.name}接続失敗 (${primaryEndpoint}): ${primaryErr.message}。エンドポイントURLとサーバー稼働状況をご確認ください。`
           );
         }
       }
@@ -1151,7 +1330,8 @@ export const executePromptStreamUnified = async (
         maxTokens: providerConfig.maxTokens,
         stream: true,
       },
-      modelToUse
+      modelToUse,
+      providerConfig
     );
 
     const headers: Record<string, string> = {
@@ -1177,16 +1357,17 @@ export const executePromptStreamUnified = async (
         body: JSON.stringify(openAIRequest),
       });
     } catch (primaryFetchErr: any) {
-      // If LM Studio or Ollama failed in Direct mode due to CORS / NetworkError, attempt automatic proxy fallback ONLY if on localhost
+      // If local providers failed in Direct mode due to CORS / NetworkError, attempt automatic proxy fallback ONLY if on localhost
+      const isLocalProvider = providerId === 'lmstudio' || providerId === 'lmstudio_bionic' || providerId === 'ollama' || providerId === 'unsloth' || providerId === 'openai_compat';
       if (
-        (providerId === 'lmstudio' || providerId === 'ollama') &&
+        isLocalProvider &&
         endpointInfo.mode === 'direct' &&
         isLocalHost
       ) {
-        const fallbackProxyUrl =
-          providerId === 'lmstudio'
-            ? (providerConfig.proxyUrl || '/api/proxy/lmstudio/chat/completions')
-            : (providerConfig.proxyUrl || '/api/proxy/ollama/v1/chat/completions');
+        let fallbackProxyUrl = providerConfig.proxyUrl || '/api/proxy/lmstudio/chat/completions';
+        if (providerId === 'ollama') fallbackProxyUrl = '/api/proxy/ollama/v1/chat/completions';
+        else if (providerId === 'unsloth') fallbackProxyUrl = '/api/proxy/unsloth/chat/completions';
+        else if (providerId === 'openai_compat') fallbackProxyUrl = '/api/proxy/openai-compat/chat/completions';
 
         try {
           onChunk(`ℹ️ [通信経路自動切替] Direct接続 (${targetEndpoint}) がブラウザCORS等のため、Proxy経由 (${fallbackProxyUrl}) に切り替えて試行します...\n\n`);
@@ -1207,17 +1388,31 @@ export const executePromptStreamUnified = async (
         }
       } else {
         // Detailed error diagnostic when on remote cloud host (e.g. *.run.app)
-        if ((providerId === 'lmstudio' || providerId === 'ollama') && !isLocalHost) {
+        if (isLocalProvider && !isLocalHost) {
           const isFetchFailed = primaryFetchErr.name === 'TypeError' || primaryFetchErr.message?.includes('fetch');
           throw new Error(
             `${providerConfig.name} (${targetEndpoint}) への通信に失敗しました (${isFetchFailed ? 'ブラウザセキュリティ制限または接続未応答' : primaryFetchErr.message})。\n\n` +
             `【原因と解決手順】\n` +
             `1. クラウド環境（HTTPS）からローカルPC（http://localhost）への通信は、ブラウザのセキュリティ保護（Mixed Content / Private Network Access）により直接接続が制限されます。\n` +
             `2. 【推奨】画面右上の「⚡ Google Geminiに切り替えて実行」を押せば、今すぐ高品質にプロンプトを実行できます。\n` +
-            `3. ローカルPCのLM Studioを連携したい場合は、ngrok等のHTTPSトンネルURL（例: https://xxxx.ngrok-free.app/v1）をBase URLに指定するか、本アプリをローカル環境（npm run dev）で実行してください。`
+            `3. ローカルPCの推論サーバーを連携したい場合は、ngrok等のHTTPSトンネルURL（例: https://xxxx.ngrok-free.app/v1）をBase URLに指定するか、本アプリをローカル環境（npm run dev）で実行してください。`
           );
         }
         throw primaryFetchErr;
+      }
+    }
+
+    // Smart fallback: If server returned 400 Bad Request due to response_format not supported, retry without response_format
+    if (response && response.status === 400 && openAIRequest.response_format) {
+      const peekText = await response.clone().text().catch(() => '');
+      if (peekText.includes('response_format') || peekText.includes('json_object') || peekText.includes('schema') || peekText.includes('unrecognized')) {
+        console.warn(`[JSON Delivery Fallback] Server rejected response_format: ${peekText}. Retrying with prompt-based JSON enforcement.`);
+        delete openAIRequest.response_format;
+        response = await fetch(targetEndpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(openAIRequest),
+        });
       }
     }
 
@@ -1243,7 +1438,7 @@ export const executePromptStreamUnified = async (
         errMsg = `HTTP ${response?.status} ${response?.statusText || ''} ${errMsg ? `(${errMsg.slice(0, 150)})` : ''}`.trim();
       }
 
-      if (providerId === 'lmstudio') {
+      if (providerId === 'lmstudio' || providerId === 'lmstudio_bionic') {
         if (errMsg.includes('ECONNREFUSED') || response?.status === 502) {
           errMsg = `LM Studio (ポート1234) に接続できませんでした。\nLM Studioが起動しており、Local Serverが開始されているか確認してください。`;
         } else if (response?.status === 500 && (errMsg.includes('No model loaded') || errMsg.includes('500') || !errMsg)) {
@@ -1251,7 +1446,10 @@ export const executePromptStreamUnified = async (
         }
       }
 
-      throw new Error(`[${providerConfig.name}] エラー: ${errMsg}`);
+      const generatedError: any = new Error(`[${providerConfig.name}] エラー: ${errMsg}`);
+      generatedError.statusCode = response?.status;
+      generatedError.rawResponseText = rawText;
+      throw generatedError;
     }
 
     const reader = response.body?.getReader();
@@ -1268,6 +1466,7 @@ export const executePromptStreamUnified = async (
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let accumulatedGeneratedText = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1290,6 +1489,7 @@ export const executePromptStreamUnified = async (
             const { text } = extractOpenAITextChunk(parsed);
             if (text) {
               totalCharacters += text.length;
+              accumulatedGeneratedText += text;
               onChunk(text);
               onStatusUpdate?.({
                 status: 'streaming',
@@ -1305,10 +1505,26 @@ export const executePromptStreamUnified = async (
       }
     }
 
+    // Check JSON compliance and repair if requested or applicable
+    let jsonStatus: 'none' | 'valid' | 'repaired' | 'invalid' = 'none';
+    const isJsonExpected = providerConfig.jsonMode === 'strict' || 
+                           providerConfig.jsonMode === 'prompt_only' ||
+                           (providerConfig.jsonMode === 'auto' && /json|manifest|ノード|node graph|\{|\}/i.test(prompt));
+
+    if (isJsonExpected && accumulatedGeneratedText) {
+      const repairResult = cleanAndRepairJson(accumulatedGeneratedText);
+      if (repairResult.success) {
+        jsonStatus = repairResult.wasRepaired ? 'repaired' : 'valid';
+      } else {
+        jsonStatus = 'invalid';
+      }
+    }
+
     onStatusUpdate?.({
       status: 'completed',
       characterCount: totalCharacters,
       latencyMs: Date.now() - startTime,
+      jsonValidationStatus: jsonStatus,
       lastUpdated: Date.now(),
     });
 
@@ -1316,11 +1532,32 @@ export const executePromptStreamUnified = async (
     console.warn('[LLM Execution Handled Notice]:', error?.message || error);
     const formattedMsg = formatLLMErrorMessage(error, providerConfig);
     const errObj = new Error(formattedMsg);
+
+    // Build comprehensive debug report object for effortless copying
+    const debugInfo: LLMErrorDebugInfo = {
+      timestamp: new Date().toISOString(),
+      providerId,
+      providerName: providerConfig.name,
+      model: providerConfig.selectedModel || 'default',
+      endpoint: endpointInfo.url,
+      connectionMode: endpointInfo.mode,
+      statusCode: error?.statusCode,
+      errorMessage: formattedMsg,
+      rawResponseText: error?.rawResponseText || error?.message,
+      requestPayloadSummary: `Provider: ${providerConfig.name}, Model: ${providerConfig.selectedModel}, Temp: ${providerConfig.temperature ?? 0.7}, MaxTokens: ${providerConfig.maxTokens ?? 'auto'}, PromptLen: ${prompt.length}`,
+      suggestedRemedy: error?.statusCode === 400 && error?.message?.includes('response_format')
+        ? '推論サーバーがresponse_format={type: "json_object"}に対応していません。「JSON伝送モード」を「プロンプト強制のみ(prompt_only)」に変更してください。'
+        : (error?.message?.includes('CORS') || error?.message?.includes('Failed to fetch'))
+          ? 'ブラウザのCORS制限または接続拒否です。接続モードを「Proxy経由」に切り替えるか、LM Studio/推論サーバーのCORS設定を有効にしてください。'
+          : 'エンドポイントURL、ポート番号、モデル名、および推論サーバーのコンソールログをご確認ください。',
+      rawErrorObject: error,
+    };
     
     // Ensure that in case of error, we never silently invoke Gemini
     onStatusUpdate?.({
       status: 'error',
       errorMessage: formattedMsg,
+      lastErrorDetails: debugInfo,
       lastUpdated: Date.now(),
     });
 
@@ -1328,6 +1565,6 @@ export const executePromptStreamUnified = async (
       onError(errObj, providerConfig);
     }
 
-    onChunk(`\n\n❌ [実行エラー - ${providerConfig.name}]:\n${formattedMsg}`);
+    onChunk(`\n\n❌ [実行エラー - ${providerConfig.name}]:\n${formattedMsg}\n\n📋 右上のステータスモニターから「デバッグ情報をコピー」して即時診断できます。`);
   }
 };

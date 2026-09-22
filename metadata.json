@@ -1,6 +1,6 @@
 {
   "name": "AIプロンプト オーケストレーター",
-  "description": "AIプロンプトを多様なモードで管理、連鎖、実行するための強力なアプリケーション。ワークフローをプロジェクトに整理し、Note.comなどのプラットフォーム向けのコンテンツ作成プロセスを「パブリッシャーモデル」の発想で効率化します。",
+  "description": "一次リソース特定・検証リサーチ（GitHub, Hugging Face, Reddit, ComfyUI, BigTech, 論文, Zenn/Qiita）と多様なLLMプロバイダーを連鎖・実行・管理するプロンプトオーケストレーション環境。",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

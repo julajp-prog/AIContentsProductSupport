@@ -3,6 +3,7 @@ import { Prompt, ExecutionMode, SystemInstruction, LLMSettings, ProviderType, Kn
 import { executePromptStreamUnified, getGeminiRecentRequestCount, fetchProviderModels } from '../services/llmService';
 import { formatKnowledgeContext } from '../services/knowledgeStorage';
 import { HyperExpertPanel } from './HyperExpertPanel';
+import { PrimaryResourceHub } from './PrimaryResourceHub';
 import { Spinner } from './common/Spinner';
 import { ICONS } from '../constants';
 
@@ -187,29 +188,45 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
     executeWithProvider('gemini', llmSettings.providers.gemini.selectedModel);
   };
 
-  const handleResetToGemini38AndRun = () => {
-    const updatedSettings: LLMSettings = {
-      ...llmSettings,
-      providers: {
-        ...llmSettings.providers,
-        gemini: {
-          ...llmSettings.providers.gemini,
-          selectedModel: 'gemini-3.8-flash',
+  const [isSyncingModels, setIsSyncingModels] = useState(false);
+
+  const handleFetchLatestGeminiModelsAndRun = async () => {
+    setIsSyncingModels(true);
+    try {
+      const liveModels = await fetchProviderModels(llmSettings.providers.gemini);
+      const chosenModel = liveModels.includes('gemini-flash-latest')
+        ? 'gemini-flash-latest'
+        : (liveModels[0] || 'gemini-3.8-flash');
+
+      const updatedSettings: LLMSettings = {
+        ...llmSettings,
+        activeProvider: 'gemini',
+        providers: {
+          ...llmSettings.providers,
+          gemini: {
+            ...llmSettings.providers.gemini,
+            availableModels: liveModels.length > 0 ? liveModels : llmSettings.providers.gemini.availableModels,
+            selectedModel: chosenModel,
+          },
         },
-      },
-    };
-    onUpdateLLMSettings(updatedSettings);
+      };
+      onUpdateLLMSettings(updatedSettings);
 
-    const updatedPrompt: Prompt = {
-      ...currentPrompt,
-      providerOverride: 'gemini',
-      modelOverride: 'gemini-3.8-flash',
-    };
-    setCurrentPrompt(updatedPrompt);
-    onUpdatePrompt(updatedPrompt);
+      const updatedPrompt: Prompt = {
+        ...currentPrompt,
+        providerOverride: 'gemini',
+        modelOverride: chosenModel,
+      };
+      setCurrentPrompt(updatedPrompt);
+      onUpdatePrompt(updatedPrompt);
 
-    setExecutionError(null);
-    executeWithProvider('gemini', 'gemini-3.8-flash');
+      setExecutionError(null);
+      executeWithProvider('gemini', chosenModel);
+    } catch (e: any) {
+      console.error('Failed to sync live models and run:', e);
+    } finally {
+      setIsSyncingModels(false);
+    }
   };
 
   const handleSwitchToProvider = (providerId: ProviderType) => {
@@ -518,6 +535,25 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
         />
       </div>
 
+      {/* Primary Resource Hub & Inspector (一次リソース特定・アクセス強化ハブ) */}
+      <div className="flex-shrink-0">
+        <PrimaryResourceHub
+          promptContent={currentPrompt.content}
+          onUpdatePromptContent={newContent => {
+            const updated = { ...currentPrompt, content: newContent };
+            setCurrentPrompt(updated);
+            onUpdatePrompt(updated);
+          }}
+          currentOutput={output}
+          executionMode={executionMode}
+          onSetExecutionMode={setExecutionMode}
+          onSelectSystemInstructionId={id => {
+            onSelectInstructionId(id);
+            setIsSystemInstructionEnabled(true);
+          }}
+        />
+      </div>
+
       {/* System Instruction & Knowledge Base Selection Ribbon */}
       <div className="bg-gray-850 rounded-xl border border-gray-750 p-2.5 shadow-sm space-y-2 flex-shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -752,11 +788,12 @@ export const PromptEditor: React.FC<PromptEditorProps> = ({
               <div className="flex items-center gap-2 pt-1 flex-wrap">
                 {executionError.providerId === 'gemini' && (
                   <button
-                    onClick={handleResetToGemini38AndRun}
-                    className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-lg shadow-md shadow-emerald-900/40 transition-all flex items-center gap-1.5 text-xs cursor-pointer"
+                    onClick={handleFetchLatestGeminiModelsAndRun}
+                    disabled={isSyncingModels}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-lg shadow-md shadow-emerald-900/40 transition-all flex items-center gap-1.5 text-xs cursor-pointer disabled:opacity-50"
                   >
                     <span>🔄</span>
-                    <span>最新推奨モデル「gemini-3.8-flash」に更新して再実行</span>
+                    <span>{isSyncingModels ? 'APIから最新モデル取得中...' : '最新モデル一覧をAPI取得・自動設定して再実行'}</span>
                   </button>
                 )}
 

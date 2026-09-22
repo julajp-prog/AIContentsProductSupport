@@ -1,6 +1,7 @@
 export enum ExecutionMode {
   STRAIGHT = 'そのまま実行',
   RESEARCH = 'リサーチ強化',
+  PRIMARY_RESOURCE = '一次リソース特定・検証',
   IMPROVE = '改善・洗練',
   SIMULATE = 'テスト・シミュレーション',
 }
@@ -10,6 +11,9 @@ export type ProviderType =
   | 'openrouter' 
   | 'ollama' 
   | 'lmstudio' 
+  | 'lmstudio_bionic'
+  | 'unsloth'
+  | 'openai_compat'
   | 'huggingface' 
   | 'github' 
   | 'groq' 
@@ -19,6 +23,8 @@ export type ProviderType =
   | 'custom';
 
 export type ConnectionMode = 'direct' | 'proxy';
+
+export type JsonDeliveryMode = 'auto' | 'strict_json_object' | 'prompt_only' | 'disabled';
 
 export interface LLMProviderConfig {
   id: ProviderType;
@@ -40,9 +46,42 @@ export interface LLMProviderConfig {
   testStatus?: 'success' | 'error' | 'testing' | 'untested';
   testLatencyMs?: number;
   testMessage?: string;
+  jsonMode?: JsonDeliveryMode; // JSON delivery protocol
+  autoRepairJson?: boolean; // Automatically repair and sanitize malformed JSON
 }
 
-export type LLMRuntimeStatus = 'idle' | 'cooldown' | 'connecting' | 'streaming' | 'completed' | 'error';
+export type LLMRuntimeStatus = 'idle' | 'cooldown' | 'connecting' | 'streaming' | 'validating_json' | 'completed' | 'error';
+
+export interface LLMErrorDebugInfo {
+  timestamp: string;
+  providerId: ProviderType;
+  providerName: string;
+  model: string;
+  endpoint: string;
+  connectionMode: 'direct' | 'proxy' | 'cloud';
+  httpStatus?: number;
+  errorType?: string;
+  errorMessage: string;
+  rawResponseText?: string;
+  requestPayloadSummary?: string;
+  suggestedRemedy?: string;
+  rawErrorObject?: any;
+}
+
+export interface JsonComplianceTestResult {
+  success: boolean;
+  latencyMs: number;
+  providerId: ProviderType;
+  providerName: string;
+  model: string;
+  supportsJsonObjectMode: boolean;
+  rawResponse: string;
+  parsedJson: any;
+  wasRepaired: boolean;
+  repairLog: string[];
+  errorMessage?: string;
+  fullDebugReport: string;
+}
 
 export interface LLMStatusMonitorState {
   status: LLMRuntimeStatus;
@@ -55,6 +94,9 @@ export interface LLMStatusMonitorState {
   latencyMs?: number;
   cooldownSeconds?: number;
   errorMessage?: string;
+  lastErrorDetails?: LLMErrorDebugInfo;
+  isJsonMode?: boolean;
+  jsonValidationStatus?: 'valid' | 'repaired' | 'invalid' | 'none';
   isGeminiIsolated: boolean; // Guaranteed true when non-gemini is selected: Gemini API is completely uncalled
   lastUpdated: number;
 }

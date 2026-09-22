@@ -24,6 +24,7 @@ import {
   loadHyperExpertSettings,
   saveHyperExpertSettings,
 } from './services/hyperExpertService';
+import { fetchProviderModels } from './services/llmService';
 
 type ActiveView = 'dashboard' | 'editor';
 
@@ -167,6 +168,51 @@ const App: React.FC = () => {
   useEffect(() => {
     saveLLMSettings(llmSettings);
   }, [llmSettings]);
+
+  // Dynamically fetch and sync live models from Google API on startup
+  useEffect(() => {
+    let isMounted = true;
+    const syncLiveModels = async () => {
+      try {
+        const geminiConfig = llmSettings.providers.gemini;
+        const liveModels = await fetchProviderModels(geminiConfig);
+        if (!isMounted || !liveModels || liveModels.length === 0) return;
+
+        setLlmSettings(prev => {
+          const currentGemini = prev.providers.gemini;
+          const isCurrentModelValid = liveModels.includes(currentGemini.selectedModel);
+          const updatedSelectedModel = isCurrentModelValid
+            ? currentGemini.selectedModel
+            : (liveModels[0] || 'gemini-flash-latest');
+
+          const currentListStr = JSON.stringify(currentGemini.availableModels);
+          const newListStr = JSON.stringify(liveModels);
+          if (currentListStr === newListStr && currentGemini.selectedModel === updatedSelectedModel) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            providers: {
+              ...prev.providers,
+              gemini: {
+                ...currentGemini,
+                availableModels: liveModels,
+                selectedModel: updatedSelectedModel,
+              },
+            },
+          };
+        });
+      } catch (err) {
+        console.warn('[Auto-sync Gemini live models]:', err);
+      }
+    };
+
+    syncLiveModels();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
   const activeInstruction = instructions.find(i => i.id === activeInstructionId) || null;

@@ -47,6 +47,44 @@ export default defineConfig(({ mode }) => {
               });
             },
           },
+          '/api/proxy/unsloth': {
+            target: 'http://127.0.0.1:8000/v1',
+            changeOrigin: true,
+            rewrite: (p) => p.replace(/^\/api\/proxy\/unsloth/, ''),
+            configure: (proxy) => {
+              proxy.on('error', (err, _req, res: any) => {
+                if (res && !res.headersSent && typeof res.writeHead === 'function') {
+                  res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+                  res.end(JSON.stringify({
+                    error: {
+                      message: `Unsloth Studio / 推論サーバー (http://127.0.0.1:8000) に接続できませんでした。サーバーが起動しているか確認してください。(${err.message})`,
+                      type: 'connection_error',
+                      code: 'ECONNREFUSED',
+                    },
+                  }));
+                }
+              });
+            },
+          },
+          '/api/proxy/openai-compat': {
+            target: 'http://127.0.0.1:8000/v1',
+            changeOrigin: true,
+            rewrite: (p) => p.replace(/^\/api\/proxy\/openai-compat/, ''),
+            configure: (proxy) => {
+              proxy.on('error', (err, _req, res: any) => {
+                if (res && !res.headersSent && typeof res.writeHead === 'function') {
+                  res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+                  res.end(JSON.stringify({
+                    error: {
+                      message: `OpenAI互換サーバー (http://127.0.0.1:8000) に接続できませんでした。(${err.message})`,
+                      type: 'connection_error',
+                      code: 'ECONNREFUSED',
+                    },
+                  }));
+                }
+              });
+            },
+          },
         },
       },
       plugins: [react()],

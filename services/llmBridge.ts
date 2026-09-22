@@ -15,6 +15,7 @@
  */
 
 import { ProviderType, LLMProviderConfig, ConnectionMode } from '../types';
+import { cleanAndRepairJson } from './jsonComplianceService';
 
 export interface StandardChatPayload {
   prompt: string;
@@ -22,6 +23,7 @@ export interface StandardChatPayload {
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;
+  jsonMode?: boolean;
 }
 
 export interface OpenAIMessage {
@@ -35,6 +37,7 @@ export interface OpenAIChatRequest {
   stream: boolean;
   temperature?: number;
   max_tokens?: number;
+  response_format?: { type: 'json_object' | 'text' };
 }
 
 export interface GeminiFormattedRequest {
@@ -63,23 +66,33 @@ export const assertGeminiIsolation = (
 };
 
 /**
- * Format payload into OpenAI-compatible format (LM Studio, Ollama, OpenRouter, etc.)
+ * Format payload into OpenAI-compatible format (LM Studio, LM Studio Bionic, Unsloth, Ollama, OpenRouter, etc.)
+ * Strictly sanitizes payload and enforces JSON mode / schema delivery integrity.
  */
 export const formatForOpenAI = (
   payload: StandardChatPayload,
-  model: string
+  model: string,
+  providerConfig?: LLMProviderConfig
 ): OpenAIChatRequest => {
   const messages: OpenAIMessage[] = [];
 
-  // 1. Map system instruction cleanly into the first message
-  if (payload.systemInstruction && payload.systemInstruction.trim()) {
+  // 1. Map system instruction cleanly into the first message with strict JSON formatting directive if requested
+  let systemText = (payload.systemInstruction || '').trim();
+
+  // If JSON mode requested or provider set to strict_json_object, enhance system prompt for local models
+  if (payload.jsonMode || providerConfig?.jsonMode === 'strict_json_object') {
+    const jsonDirective = '【SYSTEM MANDATE: OUTPUT STRICT RAW JSON ONLY. DO NOT INCLUDE ANY MARKDOWN FENCES (```), GREETINGS, OR EXPLANATORY TEXT.】';
+    systemText = systemText ? `${systemText}\n\n${jsonDirective}` : jsonDirective;
+  }
+
+  if (systemText) {
     messages.push({
       role: 'system',
-      content: payload.systemInstruction.trim(),
+      content: systemText,
     });
   }
 
-  // 2. Map user prompt with empty string fallback
+  // 2. Map user prompt with empty string fallback and strict sanitization
   const userContent = (payload.prompt || '').trim() || ' ';
   messages.push({
     role: 'user',
@@ -97,6 +110,12 @@ export const formatForOpenAI = (
   }
   if (payload.maxTokens !== undefined && payload.maxTokens > 0) {
     request.max_tokens = payload.maxTokens;
+  }
+
+  // 3. Attach response_format: { type: "json_object" } when appropriate
+  const isPromptOnly = providerConfig?.jsonMode === 'prompt_only' || providerConfig?.jsonMode === 'disabled';
+  if ((payload.jsonMode || providerConfig?.jsonMode === 'strict_json_object') && !isPromptOnly) {
+    request.response_format = { type: 'json_object' };
   }
 
   return request;
@@ -218,14 +237,15 @@ export const resolveEndpoint = (
   // Local PC Providers (LM Studio, Ollama, Custom)
   const isProxyMode = provider.connectionMode === 'proxy';
 
-  if (providerId === 'lmstudio') {
+  if (providerId === 'lmstudio' || providerId === 'lmstudio_bionic') {
+    const isBionic = providerId === 'lmstudio_bionic';
     if (isProxyMode) {
       const proxyBase = provider.proxyUrl?.replace(/\/$/, '') || '/api/proxy/lmstudio';
       return {
         url: type === 'models' ? `${proxyBase}/models` : `${proxyBase}/chat/completions`,
         mode: 'proxy',
         isProxy: true,
-        description: `Proxy経由 (${proxyBase}) ➔ http://127.0.0.1:1234/v1`,
+        description: `Proxy経由 (${proxyBase}) ➔ ${isBionic ? 'LM Studio Bionic' : 'LM Studio'} (http://127.0.0.1:1234/v1)`,
       };
     } else {
       const directBase = provider.baseUrl?.replace(/\/$/, '') || 'http://localhost:1234/v1';
@@ -233,7 +253,47 @@ export const resolveEndpoint = (
         url: type === 'models' ? `${directBase}/models` : `${directBase}/chat/completions`,
         mode: 'direct',
         isProxy: false,
-        description: `Direct直接接続 (${directBase})`,
+        description: `Direct直接接続 (${directBase}) [${isBionic ? 'LM Studio Bionic' : 'LM Studio'}]`,
+      };
+    }
+  }
+
+  if (providerId === 'unsloth') {
+    if (isProxyMode) {
+      const proxyBase = provider.proxyUrl?.replace(/\/$/, '') || '/api/proxy/unsloth';
+      return {
+        url: type === 'models' ? `${proxyBase}/models` : `${proxyBase}/chat/completions`,
+        mode: 'proxy',
+        isProxy: true,
+        description: `Proxy経由 (${proxyBase}) ➔ Unsloth Studio (http://127.0.0.1:8000/v1)`,
+      };
+    } else {
+      const directBase = provider.baseUrl?.replace(/\/$/, '') || 'http://localhost:8000/v1';
+      return {
+        url: type === 'models' ? `${directBase}/models` : `${directBase}/chat/completions`,
+        mode: 'direct',
+        isProxy: false,
+        description: `Direct直接接続 (${directBase}) [Unsloth Studio]`,
+      };
+    }
+  }
+
+  if (providerId === 'openai_compat') {
+    if (isProxyMode) {
+      const proxyBase = provider.proxyUrl?.replace(/\/$/, '') || '/api/proxy/openai-compat';
+      return {
+        url: type === 'models' ? `${proxyBase}/models` : `${proxyBase}/chat/completions`,
+        mode: 'proxy',
+        isProxy: true,
+        description: `Proxy経由 (${proxyBase}) ➔ OpenAI互換サーバー`,
+      };
+    } else {
+      const directBase = provider.baseUrl?.replace(/\/$/, '') || 'http://localhost:8000/v1';
+      return {
+        url: type === 'models' ? `${directBase}/models` : `${directBase}/chat/completions`,
+        mode: 'direct',
+        isProxy: false,
+        description: `Direct直接接続 (${directBase}) [OpenAI互換]`,
       };
     }
   }
@@ -309,49 +369,16 @@ export const extractOpenAITextChunk = (chunkData: any): { text: string; isReason
 
 /**
  * Extract JSON object safely from LLM output string
- * Handles markdown ```json blocks, trailing text, and partial formatting
+ * Utilizes the deep cleanAndRepairJson engine to recover from malformed JSON,
+ * markdown blocks, trailing commas, single quotes, unclosed braces, etc.
  */
 export const extractJsonFromText = <T = any>(rawText: string, fallback: T): T => {
   if (!rawText || !rawText.trim()) return fallback;
 
-  // 1. Try direct JSON parse
-  try {
-    return JSON.parse(rawText.trim()) as T;
-  } catch {
-    // continue
-  }
-
-  // 2. Extract ```json ... ``` or ``` ... ```
-  const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (codeBlockMatch && codeBlockMatch[1]) {
-    try {
-      return JSON.parse(codeBlockMatch[1].trim()) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  // 3. Extract between first '{' and last '}' or '[' and ']'
-  const firstBrace = rawText.indexOf('{');
-  const lastBrace = rawText.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      const candidate = rawText.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(candidate) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  const firstBracket = rawText.indexOf('[');
-  const lastBracket = rawText.lastIndexOf(']');
-  if (firstBracket !== -1 && lastBracket > firstBracket) {
-    try {
-      const candidate = rawText.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(candidate) as T;
-    } catch {
-      // continue
-    }
+  // Use comprehensive auto-repair engine
+  const repairResult = cleanAndRepairJson(rawText);
+  if (repairResult.success && repairResult.parsed !== null && repairResult.parsed !== undefined) {
+    return repairResult.parsed as T;
   }
 
   return fallback;
